@@ -95,7 +95,7 @@ def calmar_ratio(x):
     '''Annualized Return over Max Drawdown'''
     ann_ret = annualized_return(x)
     max_dd = max_drawdown(x)
-    calmar_values = ann_ret.values / (-max_dd.values)
+    calmar_values = ann_ret['Annualized Return'].values / (-max_dd['Max Drawdown'].values)
     
     if isinstance(x, pd.DataFrame):
         df = pd.DataFrame({

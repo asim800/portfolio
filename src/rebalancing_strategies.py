@@ -164,26 +164,44 @@ class BaseRebalancingStrategy(ABC):
 class BuyAndHoldStrategy(BaseRebalancingStrategy):
     """
     Buy-and-hold strategy - never rebalances.
-    Maintains original weights and lets portfolio drift with market performance.
+    Maintains fixed share counts and lets portfolio weights drift with market performance.
     """
-    
+
     def __init__(self, **kwargs):
         # Buy and hold never rebalances, so period doesn't matter
         super().__init__(rebalancing_period_days=float('inf'), **kwargs)
         self.initial_weights: Optional[np.ndarray] = None
-    
-    def calculate_target_weights(self, 
+        self.initial_portfolio_value: Optional[float] = None
+        self.share_counts: Optional[np.ndarray] = None
+
+    def calculate_target_weights(self,
                                current_weights: np.ndarray,
                                period_returns: pd.Series,
                                current_date: date,
                                **kwargs) -> np.ndarray:
-        """For buy-and-hold, target weights are always the initial weights."""
+        """
+        For buy-and-hold, return current market weights based on fixed share counts.
+        This allows weights to drift naturally with market performance.
+        """
         if self.initial_weights is None:
-            # First time - set initial weights
+            # First time - set initial weights and calculate share counts
             self.initial_weights = current_weights.copy()
-        
-        return self.initial_weights
-    
+            self.initial_portfolio_value = 1.0  # Assume starting with $1
+
+            # Calculate initial share counts based on weights
+            # share_counts[i] = (weight[i] * portfolio_value) / price[i]
+            # Since we normalize, we can assume price = 1 initially
+            self.share_counts = current_weights.copy()
+
+            logging.info(f"BuyAndHold: Initial weights: {self.initial_weights}")
+            logging.info(f"BuyAndHold: Initial share counts: {self.share_counts}")
+
+            return self.initial_weights
+
+        # For subsequent periods, return the current weights (already drifted)
+        # The weights have naturally drifted due to different asset performance
+        return current_weights
+
     def needs_rebalancing(self, current_date: date) -> bool:
         """Buy-and-hold never rebalances after the initial setup."""
         return self.initial_weights is None

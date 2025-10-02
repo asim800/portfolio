@@ -98,19 +98,22 @@ class PortfolioOptimizer:
         
         return method_params.get(method, {})
     
-    def optimize(self, method: str, mean_returns: np.ndarray, cov_matrix: np.ndarray, 
+    def optimize(self, method: str, mean_returns: pd.Series, cov_matrix: pd.DataFrame,
                 **kwargs) -> Dict[str, Any]:
         """
         Main optimization interface - route to specific method.
-        
+
+        Takes pandas inputs, converts to numpy for CVXPY optimization,
+        and returns results with pandas Series weights.
+
         Parameters:
         -----------
         method : str
             Optimization method name
-        mean_returns : np.ndarray
-            Expected returns vector
-        cov_matrix : np.ndarray
-            Covariance matrix
+        mean_returns : pd.Series
+            Expected returns with asset names as index
+        cov_matrix : pd.DataFrame
+            Covariance matrix with asset names as index/columns
         **kwargs : dict
             Method-specific parameters and constraints
             
@@ -125,11 +128,27 @@ class PortfolioOptimizer:
         # Merge with default constraints
         constraints = {**self.default_constraints, **kwargs}
         
-        # Call the specific optimization method
+        # Store asset names for result conversion
+        assets = mean_returns.index
+
+        # Convert pandas to numpy for optimization
+        mu = mean_returns.values
+        Sigma = cov_matrix.values
+
+        # Call the specific optimization method with numpy arrays
         opt_func = self.optimization_methods[method]
-        
+
         try:
-            result = opt_func(mean_returns, cov_matrix, **constraints)
+            result = opt_func(mu, Sigma, **constraints)
+
+            # Convert numpy weights to pandas Series with asset names
+            if result.get('status') == 'optimal' and 'weights' in result:
+                weights_array = result['weights']
+                result['weights'] = pd.Series(weights_array, index=assets, name='weights')
+            else:
+                # Failed optimization - return zero weights as pandas Series
+                result['weights'] = pd.Series(0.0, index=assets, name='weights')
+
             result['method'] = method
             result['parameters'] = constraints
             return result
@@ -139,46 +158,68 @@ class PortfolioOptimizer:
                 'status': 'failed',
                 'message': str(e),
                 'method': method,
-                'weights': np.zeros(len(mean_returns))
+                'weights': pd.Series(0.0, index=assets, name='weights')
             }
     
     # =============================================================================
     # OPTIMIZATION ALGORITHMS
     # =============================================================================
+
     
     def optimize_mean_variance(self, mean_returns: np.ndarray, cov_matrix: np.ndarray,
                              risk_aversion: float = 1.0, **constraints) -> Dict[str, Any]:
         """
         Mean-variance optimization (Markowitz).
-        
+
         Maximizes: μ'w - (γ/2)w'Σw
         where μ = expected returns, Σ = covariance matrix, γ = risk aversion
+
+        Parameters:
+        -----------
+        mean_returns : np.ndarray
+            Expected returns vector
+        cov_matrix : np.ndarray
+            Covariance matrix
+        risk_aversion : float
+            Risk aversion parameter (higher = more conservative)
+
+        Returns:
+        --------
+        Dict with optimization results (weights as numpy array)
         """
         n = len(mean_returns)
         w = cp.Variable(n)
-        
+
         # Objective: maximize expected return - risk penalty
         portfolio_return = mean_returns @ w
         portfolio_risk = cp.quad_form(w, cov_matrix)
         objective = cp.Maximize(portfolio_return - (risk_aversion / 2) * portfolio_risk)
-        
+
         # Apply constraints
         constraint_list = self._build_constraints(w, **constraints)
-        
+
         # Solve optimization
         problem = cp.Problem(objective, constraint_list)
         problem.solve(solver=cp.ECOS, verbose=False)
-        
+
         if problem.status not in ['optimal', 'optimal_inaccurate']:
-            return {'status': 'failed', 'message': f"Solver status: {problem.status}"}
-        
+            return {
+                'status': 'failed',
+                'message': f"Solver status: {problem.status}",
+                'weights': np.zeros(n)
+            }
+
         weights = w.value
         if weights is None:
-            return {'status': 'failed', 'message': "No solution found"}
-        
-        # Calculate portfolio metrics
+            return {
+                'status': 'failed',
+                'message': "No solution found",
+                'weights': np.zeros(n)
+            }
+
+        # Calculate portfolio metrics using numpy
         metrics = self._calculate_portfolio_metrics(weights, mean_returns, cov_matrix)
-        
+
         return {
             'status': 'optimal',
             'weights': weights,
@@ -191,39 +232,62 @@ class PortfolioOptimizer:
                                     **constraints) -> Dict[str, Any]:
         """
         Robust mean-variance optimization with uncertainty sets.
-        
+
         Accounts for uncertainty in expected returns using ellipsoidal uncertainty sets.
+
+        Parameters:
+        -----------
+        mean_returns : np.ndarray
+            Expected returns vector
+        cov_matrix : np.ndarray
+            Covariance matrix
+        risk_aversion : float
+            Risk aversion parameter
+        uncertainty_level : float
+            Uncertainty level for robust optimization
+
+        Returns:
+        --------
+        Dict with optimization results (weights as numpy array)
         """
         n = len(mean_returns)
         w = cp.Variable(n)
-        
+
         # Robust objective with uncertainty set
         portfolio_return = mean_returns @ w
-        
+
         # Uncertainty adjustment: subtract uncertainty penalty
         uncertainty_penalty = uncertainty_level * cp.norm(cp.multiply(np.sqrt(np.diag(cov_matrix)), w))
         robust_return = portfolio_return - uncertainty_penalty
-        
+
         portfolio_risk = cp.quad_form(w, cov_matrix)
         objective = cp.Maximize(robust_return - (risk_aversion / 2) * portfolio_risk)
-        
+
         # Apply constraints
         constraint_list = self._build_constraints(w, **constraints)
-        
+
         # Solve optimization
         problem = cp.Problem(objective, constraint_list)
         problem.solve(solver=cp.ECOS, verbose=False)
-        
+
         if problem.status not in ['optimal', 'optimal_inaccurate']:
-            return {'status': 'failed', 'message': f"Solver status: {problem.status}"}
-        
+            return {
+                'status': 'failed',
+                'message': f"Solver status: {problem.status}",
+                'weights': np.zeros(n)
+            }
+
         weights = w.value
         if weights is None:
-            return {'status': 'failed', 'message': "No solution found"}
-        
-        # Calculate portfolio metrics
+            return {
+                'status': 'failed',
+                'message': "No solution found",
+                'weights': np.zeros(n)
+            }
+
+        # Calculate portfolio metrics using numpy
         metrics = self._calculate_portfolio_metrics(weights, mean_returns, cov_matrix)
-        
+
         return {
             'status': 'optimal',
             'weights': weights,
@@ -289,38 +353,57 @@ class PortfolioOptimizer:
                                 **constraints) -> Dict[str, Any]:
         """
         Minimum variance optimization.
-        
+
         Minimizes portfolio variance without regard to expected returns.
+
+        Parameters:
+        -----------
+        mean_returns : np.ndarray
+            Expected returns vector (not used in min variance)
+        cov_matrix : np.ndarray
+            Covariance matrix
+
+        Returns:
+        --------
+        Dict with optimization results (weights as numpy array)
         """
         n = len(mean_returns)
         w = cp.Variable(n)
-        
+
         # Objective: minimize portfolio variance
         objective = cp.Minimize(cp.quad_form(w, cov_matrix))
-        
+
         # Apply constraints
         constraint_list = self._build_constraints(w, **constraints)
-        
+
         # Solve optimization
         problem = cp.Problem(objective, constraint_list)
         problem.solve(solver=cp.ECOS, verbose=False)
-        
+
         if problem.status not in ['optimal', 'optimal_inaccurate']:
-            return {'status': 'failed', 'message': f"Solver status: {problem.status}"}
-        
+            return {
+                'status': 'failed',
+                'message': f"Solver status: {problem.status}",
+                'weights': np.zeros(n)
+            }
+
         weights = w.value
         if weights is None:
-            return {'status': 'failed', 'message': "No solution found"}
-        
-        # Calculate portfolio metrics
+            return {
+                'status': 'failed',
+                'message': "No solution found",
+                'weights': np.zeros(n)
+            }
+
+        # Calculate portfolio metrics using numpy
         metrics = self._calculate_portfolio_metrics(weights, mean_returns, cov_matrix)
-        
+
         return {
             'status': 'optimal',
             'weights': weights,
             **metrics
         }
-    
+
     def optimize_maximum_sharpe(self, mean_returns: np.ndarray, cov_matrix: np.ndarray,
                               **constraints) -> Dict[str, Any]:
         """
@@ -620,6 +703,51 @@ class PortfolioOptimizer:
         effective_assets = np.sum(weights > 0.001)  # Assets with meaningful allocation
         concentration = np.sum(weights**2)  # Herfindahl index
         
+        return {
+            'expected_return': portfolio_return,
+            'volatility': portfolio_volatility,
+            'sharpe_ratio': sharpe_ratio,
+            'total_weight': total_weight,
+            'max_weight': max_weight,
+            'effective_assets': effective_assets,
+            'concentration': concentration
+        }
+
+    def _calculate_portfolio_metrics_pandas(self, weights: pd.Series, mean_returns: pd.Series,
+                                          cov_matrix: pd.DataFrame) -> Dict[str, float]:
+        """
+        Calculate portfolio performance metrics using pandas operations.
+
+        Parameters:
+        -----------
+        weights : pd.Series
+            Portfolio weights with asset names as index
+        mean_returns : pd.Series
+            Expected returns with asset names as index
+        cov_matrix : pd.DataFrame
+            Covariance matrix with asset names as index/columns
+
+        Returns:
+        --------
+        Dict with portfolio metrics
+        """
+        # Expected return (annualized) - using pandas dot product
+        portfolio_return = weights.dot(mean_returns) * 252
+
+        # Portfolio volatility (annualized) - using pandas operations
+        portfolio_variance = weights.dot(cov_matrix.dot(weights))
+        portfolio_volatility = np.sqrt(portfolio_variance) * np.sqrt(252)
+
+        # Sharpe ratio
+        excess_return = portfolio_return - self.risk_free_rate
+        sharpe_ratio = excess_return / portfolio_volatility if portfolio_volatility > 0 else 0
+
+        # Weight statistics using pandas operations
+        total_weight = weights.sum()
+        max_weight = weights.max()
+        effective_assets = (weights > 0.001).sum()  # Assets with meaningful allocation
+        concentration = (weights**2).sum()  # Herfindahl index
+
         return {
             'expected_return': portfolio_return,
             'volatility': portfolio_volatility,

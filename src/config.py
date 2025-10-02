@@ -5,7 +5,7 @@ Contains all configurable parameters for dynamic portfolio optimization.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Tuple
 from datetime import datetime
 
 
@@ -23,6 +23,13 @@ class RebalancingConfig:
     single_portfolio_mode: bool = False  # Run one optimization method by default
     optimization_methods: List[str] = field(default_factory=lambda: ['mean_variance'])  # Single method by default
     comparison_mode: bool = False  # Set to True to compare multiple optimization methods
+
+    # Portfolio Comparison Configuration
+    comparison_pairs: List[Tuple[str, str]] = field(default_factory=lambda: [
+        ('buy_and_hold', 'mean_variance'),    # Classic active vs passive
+        ('spy_only', 'mean_variance'),        # Benchmark vs optimization
+        ('equal_weight', 'mean_variance'),    # Naive vs optimization
+    ])  # Pairs of portfolios to compare directly
     
     # Rebalancing Strategies Configuration
     rebalancing_strategies: List[str] = field(default_factory=lambda: [

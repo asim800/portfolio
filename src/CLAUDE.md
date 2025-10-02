@@ -67,9 +67,8 @@ This is a Python financial analysis system focused on portfolio optimization wit
 - Mixed portfolios combine optimized equity weights with cash component
 - Tracks performance across calendar day periods with comprehensive metrics
 
-#### Performance Tracking (performance_tracker.py)
-- `PerformanceTracker` class for collecting and analyzing portfolio metrics
-- `PeriodPerformance` dataclass for structured performance storage
+#### Portfolio Tracking (portfolio_tracker.py)
+- `PortfolioTracker` class for collecting and analyzing portfolio metrics using pandas DataFrames
 - Calculates comprehensive metrics: Sharpe ratio, beta, drawdown, Calmar ratio
 - Supports mixed portfolio tracking with cash/equity allocation percentages
 - Exports results to CSV files for analysis

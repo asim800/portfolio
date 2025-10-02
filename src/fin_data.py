@@ -280,27 +280,28 @@ class FinData:
     
     def get_baseline_weights(self, tickers: List[str]) -> np.ndarray:
         """
-        Get baseline portfolio weights.
-        
+        Get baseline portfolio weights aligned with returns data column order.
+
         Parameters:
         -----------
         tickers : List[str]
-            List of ticker symbols
-            
+            List of ticker symbols in returns data column order
+
         Returns:
         --------
-        np.ndarray of weights corresponding to ticker order
+        np.ndarray of weights corresponding to ticker order (matching returns columns)
         """
         if self._tickers_df is None:
             raise ValueError("Tickers must be loaded first using load_tickers()")
-        
-        # Create weight array in ticker order
+
+        # Create weight array in the order of the tickers list (which matches returns columns)
         weights = np.zeros(len(tickers))
         ticker_to_weight = dict(zip(self._tickers_df['Symbol'], self._tickers_df['Weight']))
-        
+
+        # Map weights to match the order of tickers (returns data columns)
         for i, ticker in enumerate(tickers):
             weights[i] = ticker_to_weight.get(ticker, 0.0)
-        
+
         # If no weights found, use equal weights
         if weights.sum() == 0:
             weights = np.ones(len(tickers)) / len(tickers)
@@ -308,7 +309,8 @@ class FinData:
         else:
             # Renormalize to ensure sum = 1
             weights = weights / weights.sum()
-        
+
+        logging.info(f"Baseline weights aligned to returns columns: {dict(zip(tickers, weights))}")
         return weights
     
     # =============================================================================
@@ -593,7 +595,7 @@ class FinData:
             return None
     
     def get_covariance_matrix(self, returns: pd.DataFrame, 
-                            method: str = 'sample', **kwargs) -> np.ndarray:
+                            method: str = 'sample', **kwargs) -> pd.DataFrame:
         """
         Calculate covariance matrix using specified method.
         
@@ -636,9 +638,12 @@ class FinData:
         eigenvalues, eigenvectors = np.linalg.eigh(cov_matrix)
         eigenvalues = np.maximum(eigenvalues, 1e-8)  # Floor negative eigenvalues
         cov_matrix = eigenvectors @ np.diag(eigenvalues) @ eigenvectors.T
-        
+
+        # Convert to pandas DataFrame with asset names
+        cov_df = pd.DataFrame(cov_matrix, index=returns.columns, columns=returns.columns)
+
         logging.info(f"Covariance matrix calculated using '{method}' method")
-        return cov_matrix
+        return cov_df
     
     def get_available_covariance_methods(self) -> List[str]:
         """Get list of available covariance calculation methods."""
