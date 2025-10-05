@@ -41,16 +41,14 @@ def test_time_varying_mean_only():
     print(f"  Bear market (days 500-999):")
     print(f"    SPY: {mean_ts.iloc[500]['SPY']:.2%}, AGG: {mean_ts.iloc[500]['AGG']:.2%}")
 
-    # Set time-varying parameters
-    generator.set_time_varying_parameters(mean_ts)
-
-    # Generate paths
-    paths = generator.generate_paths_time_varying(
+    # Generate paths with unified API (time-varying mean)
+    paths = generator.generate_paths(
         num_simulations=1000,
         start_date='2025-01-01',
         total_periods=1000,
         periods_per_year=252,  # Daily
-        frequency='D'
+        frequency='D',
+        mean_returns=mean_ts  # DataFrame triggers time-varying path
     )
 
     print(f"\nGenerated paths shape: {paths.shape}")
@@ -126,16 +124,15 @@ def test_time_varying_mean_and_cov():
     print(f"  High vol regime (days 250-499):")
     print(f"    SPY variance: {cov_ts.iloc[250]['SPY_SPY']:.4f}")
 
-    # Set parameters
-    generator.set_time_varying_parameters(mean_ts, cov_ts)
-
-    # Generate paths
-    paths = generator.generate_paths_time_varying(
+    # Generate paths with unified API (time-varying mean and covariance)
+    paths = generator.generate_paths(
         num_simulations=1000,
         start_date='2025-01-01',
         total_periods=500,
         periods_per_year=252,
-        frequency='D'
+        frequency='D',
+        mean_returns=mean_ts,
+        cov_matrices=cov_ts  # Both DataFrames trigger time-varying path
     )
 
     # Analyze volatility regimes
@@ -196,15 +193,14 @@ def test_expanding_window_estimation():
     print(f"  Final estimate (full window):")
     print(f"    SPY: {mean_ts.iloc[-1]['SPY']:.2%}, AGG: {mean_ts.iloc[-1]['AGG']:.2%}")
 
-    # Set and generate
-    generator.set_time_varying_parameters(mean_ts)
-
-    paths = generator.generate_paths_time_varying(
+    # Generate with unified API (adaptive parameters)
+    paths = generator.generate_paths(
         num_simulations=100,
         start_date=dates_list[0].strftime('%Y-%m-%d'),
         total_periods=len(mean_ts),
         periods_per_year=252,
-        frequency='D'
+        frequency='D',
+        mean_returns=mean_ts  # DataFrame triggers time-varying path
     )
 
     print(f"\nGenerated paths with expanding window:")
