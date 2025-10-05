@@ -134,17 +134,28 @@ This is a comprehensive **portfolio lifecycle simulation and analysis system** t
 - **Key formula**: `period_mean = annual_mean / periods_per_year`, `period_cov = annual_cov / periods_per_year`
 - **Note**: This was a critical bug fix - see commit history
 
-**4. Why time-varying parameters?**
+**4. Why unified API for time-varying and constant parameters?**
+- **Problem**: Originally had 3 separate methods (`generate_paths`, `generate_lifecycle_paths`, `generate_paths_time_varying`) with duplicated logic
+- **Solution**: ONE `generate_paths()` method with type-based dispatch
+- **Simple API**: `generator.generate_paths(1000, 260, 26)` - just 3 parameters, uses default constant parameters
+- **Advanced API**: `generator.generate_paths(..., mean_returns=df)` - pass DataFrame when needed
+- **Type detection**: `isinstance(mean_returns, pd.DataFrame)` automatically routes to time-varying or constant implementation
+- **Performance**: Constant path uses vectorized sampling (fast), time-varying uses period-by-period loop (flexible)
+- **File**: [mc_path_generator.py:generate_paths()](mc_path_generator.py)
+
+**5. Why time-varying parameters?**
 - **Limitation**: Constant mean/cov assumes markets never change (unrealistic for 30+ year simulations)
 - **Solution**: Allow parameters to vary by date via pandas DataFrame
 - **Use cases**: Bull→bear regime shifts, CAPE-based expected returns, adaptive estimation
-- **File**: [mc_path_generator.py:set_time_varying_parameters()](mc_path_generator.py)
+- **API**: Pass DataFrames to `generate_paths()` - automatically triggers time-varying path generation
 - **Guide**: [../docs/TIME_VARYING_PARAMS_GUIDE.md](../docs/TIME_VARYING_PARAMS_GUIDE.md)
 
-**5. Why flattened covariance matrices in DataFrames?**
-- **Problem**: Can't store 2D numpy arrays directly in DataFrame columns
-- **Solution**: Flatten to columns like `SPY_SPY`, `SPY_AGG`, `AGG_AGG` (symmetric matrix)
-- **Reconstruction**: See `set_time_varying_parameters()` - rebuilds symmetric matrix from flattened elements
+**6. Why list-of-arrays format for covariance DataFrames?**
+- **Problem**: Can't store 2D numpy arrays directly in standard DataFrame columns
+- **Old approach**: Flattened columns like `SPY_SPY`, `SPY_AGG`, `AGG_AGG` (requires reconstruction)
+- **New approach**: Single `cov_matrix` column containing np.ndarray objects (no reconstruction needed)
+- **Usage**: `cov_df = pd.DataFrame({'cov_matrix': [cov1, cov2, ...]}, index=dates)`
+- **Backward compatibility**: Still supports flattened format via automatic detection
 
 ### Common Gotchas and Edge Cases
 
@@ -1266,9 +1277,16 @@ if employer_match_cap is not None:
    - Decumulation paths start from last accumulation period (no gap, no re-seeding)
    - Annual decumulation returns compound sub-annual periods: `(1+r1)*(1+r2)*...(1+r26) - 1`
    - Validated: test_continuous_paths.py confirms zero-error continuity
-4. **Time-varying parameters** (NEW):
+4. **Unified API with type-based dispatch** (MAJOR REFACTOR):
+   - **Problem**: Had 3 separate methods with duplicated logic (generate_paths, generate_lifecycle_paths, generate_paths_time_varying)
+   - **Solution**: ONE `generate_paths()` method that accepts BOTH constant (np.ndarray) and time-varying (pd.DataFrame) parameters
+   - **Simple API**: `generator.generate_paths(1000, 260, 26)` - uses default constant parameters (fast vectorized path)
+   - **Advanced API**: `generator.generate_paths(..., mean_returns=df)` - pass DataFrame when needed (flexible time-varying path)
+   - **Type detection**: `isinstance(mean_returns, pd.DataFrame)` automatically routes to appropriate implementation
+   - **Zero code duplication**: All logic in two private methods (_generate_constant, _generate_time_varying)
+   - **Backward compatible**: Still supports both flattened and list-of-arrays covariance formats
+5. **Time-varying parameters** (NEW):
    - Added support for time-varying mean returns and covariance matrices via pandas DataFrames
-   - Methods: `set_time_varying_parameters(mean_ts, cov_ts)` and `generate_paths_time_varying(...)`
    - Enables regime switching (bull/bear markets), adaptive estimation, structural breaks
    - Nearest-neighbor date matching for parameter lookup
    - Validated: test_time_varying_params.py confirms regime transitions and volatility changes
