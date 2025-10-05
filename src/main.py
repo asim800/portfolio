@@ -71,13 +71,8 @@ class PortfolioOrchestrator:
             cache_dir="../data"
         )
         
-        self.portfolio_optimizer = PortfolioOptimizer(
-            risk_free_rate=config.risk_free_rate
-        )
-        
         self.performance_engine = PerformanceEngine(
             data=self.fin_data,
-            optimizer=self.portfolio_optimizer,
             config=config
         )
         
@@ -127,29 +122,30 @@ class PortfolioOrchestrator:
         if self.returns_df is None:
             raise ValueError("Data must be loaded first")
         
-        # Calculate mean returns and covariance matrix
-        mean_returns = self.returns_df.mean()  # Keep as pandas Series
+        # Calculate mean returns and covariance matrix (pandas)
+        mean_returns = self.returns_df.mean()
         cov_matrix = self.fin_data.get_covariance_matrix(
             self.returns_df,
             method=self.config.covariance_method,
             **self.config.get_covariance_params()
         )
-        
+
         # Run optimization for each configured method
         results = {}
-        
+        optimizer = self.performance_engine.optimizer
+
         for method in self.config.optimization_methods:
             logging.info(f"Running {method} optimization...")
-            
+
             # Get method-specific parameters
             normalized_method = self.config.normalize_method_name(method)
             opt_params = self.config.get_optimization_params(method)
-            
-            # Run optimization
-            result = self.portfolio_optimizer.optimize(
+
+            # Run optimization (convert to numpy at boundary)
+            result = optimizer.optimize(
                 method=normalized_method,
-                mean_returns=mean_returns,
-                cov_matrix=cov_matrix,
+                mean_returns=mean_returns.values,  # pandas → numpy
+                cov_matrix=cov_matrix.values,      # pandas → numpy
                 **opt_params
             )
             
@@ -280,7 +276,7 @@ class PortfolioOrchestrator:
             logging.debug(f"{method} status: {result.get('status', 'unknown')}")
 
         # Create comparison DataFrame
-        comparison_df = self.portfolio_optimizer.compare_portfolios(static_results)
+        comparison_df = self.performance_engine.optimizer.compare_portfolios(static_results)
 
         if not comparison_df.empty and 'Portfolio' in comparison_df.columns:
             logging.info("\nPortfolio Comparison:")

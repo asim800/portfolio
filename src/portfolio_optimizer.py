@@ -98,67 +98,57 @@ class PortfolioOptimizer:
         
         return method_params.get(method, {})
     
-    def optimize(self, method: str, mean_returns: pd.Series, cov_matrix: pd.DataFrame,
+    def optimize(self, method: str, mean_returns: np.ndarray, cov_matrix: np.ndarray,
                 **kwargs) -> Dict[str, Any]:
         """
         Main optimization interface - route to specific method.
 
-        Takes pandas inputs, converts to numpy for CVXPY optimization,
-        and returns results with pandas Series weights.
+        Works exclusively with numpy arrays for consistency and performance.
+        Callers should handle pandas/numpy conversions at the boundary.
 
         Parameters:
         -----------
         method : str
             Optimization method name
-        mean_returns : pd.Series
-            Expected returns with asset names as index
-        cov_matrix : pd.DataFrame
-            Covariance matrix with asset names as index/columns
+        mean_returns : np.ndarray
+            Expected returns vector (shape: n_assets,)
+        cov_matrix : np.ndarray
+            Covariance matrix (shape: n_assets × n_assets)
         **kwargs : dict
             Method-specific parameters and constraints
-            
+
         Returns:
         --------
-        Dict with optimization results
+        Dict with optimization results:
+            - 'status': 'optimal' or 'failed'
+            - 'weights': np.ndarray of portfolio weights
+            - 'method': optimization method used
+            - 'expected_return', 'volatility', 'sharpe_ratio': float metrics
+            - 'message': error message if failed
         """
         if method not in self.optimization_methods:
             available = list(self.optimization_methods.keys())
             raise ValueError(f"Unknown optimization method '{method}'. Available: {available}")
-        
+
         # Merge with default constraints
         constraints = {**self.default_constraints, **kwargs}
-        
-        # Store asset names for result conversion
-        assets = mean_returns.index
-
-        # Convert pandas to numpy for optimization
-        mu = mean_returns.values
-        Sigma = cov_matrix.values
 
         # Call the specific optimization method with numpy arrays
         opt_func = self.optimization_methods[method]
 
         try:
-            result = opt_func(mu, Sigma, **constraints)
-
-            # Convert numpy weights to pandas Series with asset names
-            if result.get('status') == 'optimal' and 'weights' in result:
-                weights_array = result['weights']
-                result['weights'] = pd.Series(weights_array, index=assets, name='weights')
-            else:
-                # Failed optimization - return zero weights as pandas Series
-                result['weights'] = pd.Series(0.0, index=assets, name='weights')
-
+            result = opt_func(mean_returns, cov_matrix, **constraints)
             result['method'] = method
             result['parameters'] = constraints
             return result
         except Exception as e:
             logging.error(f"Optimization failed for method '{method}': {e}")
+            n_assets = len(mean_returns)
             return {
                 'status': 'failed',
                 'message': str(e),
                 'method': method,
-                'weights': pd.Series(0.0, index=assets, name='weights')
+                'weights': np.zeros(n_assets)
             }
     
     # =============================================================================
@@ -713,66 +703,23 @@ class PortfolioOptimizer:
             'concentration': concentration
         }
 
-    def _calculate_portfolio_metrics_pandas(self, weights: pd.Series, mean_returns: pd.Series,
-                                          cov_matrix: pd.DataFrame) -> Dict[str, float]:
-        """
-        Calculate portfolio performance metrics using pandas operations.
-
-        Parameters:
-        -----------
-        weights : pd.Series
-            Portfolio weights with asset names as index
-        mean_returns : pd.Series
-            Expected returns with asset names as index
-        cov_matrix : pd.DataFrame
-            Covariance matrix with asset names as index/columns
-
-        Returns:
-        --------
-        Dict with portfolio metrics
-        """
-        # Expected return (annualized) - using pandas dot product
-        portfolio_return = weights.dot(mean_returns) * 252
-
-        # Portfolio volatility (annualized) - using pandas operations
-        portfolio_variance = weights.dot(cov_matrix.dot(weights))
-        portfolio_volatility = np.sqrt(portfolio_variance) * np.sqrt(252)
-
-        # Sharpe ratio
-        excess_return = portfolio_return - self.risk_free_rate
-        sharpe_ratio = excess_return / portfolio_volatility if portfolio_volatility > 0 else 0
-
-        # Weight statistics using pandas operations
-        total_weight = weights.sum()
-        max_weight = weights.max()
-        effective_assets = (weights > 0.001).sum()  # Assets with meaningful allocation
-        concentration = (weights**2).sum()  # Herfindahl index
-
-        return {
-            'expected_return': portfolio_return,
-            'volatility': portfolio_volatility,
-            'sharpe_ratio': sharpe_ratio,
-            'total_weight': total_weight,
-            'max_weight': max_weight,
-            'effective_assets': effective_assets,
-            'concentration': concentration
-        }
     
     def compare_portfolios(self, portfolios: Dict[str, Dict[str, Any]]) -> pd.DataFrame:
         """
         Compare multiple portfolio optimization results.
-        
+
         Parameters:
         -----------
         portfolios : Dict[str, Dict[str, Any]]
             Dictionary of portfolio results from optimize() calls
-            
+            Each result should have 'status', 'weights' (numpy array), and metrics
+
         Returns:
         --------
         pd.DataFrame with comparison metrics
         """
         comparison_data = []
-        
+
         for name, result in portfolios.items():
             if result.get('status') == 'optimal':
                 row = {
@@ -786,5 +733,11 @@ class PortfolioOptimizer:
                     'Status': result.get('status', 'unknown')
                 }
                 comparison_data.append(row)
-        
+
+        if not comparison_data:
+            # Return empty DataFrame with correct columns if no successful optimizations
+            return pd.DataFrame(columns=['Portfolio', 'Expected Return', 'Volatility',
+                                        'Sharpe Ratio', 'Max Weight', 'Effective Assets',
+                                        'Concentration', 'Status'])
+
         return pd.DataFrame(comparison_data)

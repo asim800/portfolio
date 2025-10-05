@@ -171,8 +171,7 @@ class BuyAndHoldStrategy(BaseRebalancingStrategy):
         # Buy and hold never rebalances, so period doesn't matter
         super().__init__(rebalancing_period_days=float('inf'), **kwargs)
         self.initial_weights: Optional[np.ndarray] = None
-        self.initial_portfolio_value: Optional[float] = None
-        self.share_counts: Optional[np.ndarray] = None
+        # Note: Weight drift is calculated by Portfolio class using returns data
 
     def calculate_target_weights(self,
                                current_weights: np.ndarray,
@@ -180,26 +179,20 @@ class BuyAndHoldStrategy(BaseRebalancingStrategy):
                                current_date: date,
                                **kwargs) -> np.ndarray:
         """
-        For buy-and-hold, return current market weights based on fixed share counts.
-        This allows weights to drift naturally with market performance.
+        For buy-and-hold, just return current weights.
+
+        NOTE: The actual drift calculation is handled by the Portfolio class
+        in portfolio.py (lines 388-398) which correctly computes weight drift
+        using multiplicative returns: w_new = w_old * (1 + r) / sum(w_old * (1 + r))
+
+        This method exists only for interface compatibility with BaseRebalancingStrategy.
         """
         if self.initial_weights is None:
-            # First time - set initial weights and calculate share counts
+            # First time - store initial weights
             self.initial_weights = current_weights.copy()
-            self.initial_portfolio_value = 1.0  # Assume starting with $1
+            logging.debug(f"BuyAndHold: Set initial weights: {self.initial_weights}")
 
-            # Calculate initial share counts based on weights
-            # share_counts[i] = (weight[i] * portfolio_value) / price[i]
-            # Since we normalize, we can assume price = 1 initially
-            self.share_counts = current_weights.copy()
-
-            logging.info(f"BuyAndHold: Initial weights: {self.initial_weights}")
-            logging.info(f"BuyAndHold: Initial share counts: {self.share_counts}")
-
-            return self.initial_weights
-
-        # For subsequent periods, return the current weights (already drifted)
-        # The weights have naturally drifted due to different asset performance
+        # Return current weights (drift is calculated by Portfolio class)
         return current_weights
 
     def needs_rebalancing(self, current_date: date) -> bool:
@@ -387,11 +380,107 @@ class SpyOnlyStrategy(BaseRebalancingStrategy):
         return target_weights
 
 
+class OptimizedRebalancingStrategy(BaseRebalancingStrategy):
+    """
+    Optimization-based rebalancing strategy.
+    Uses PortfolioOptimizer to calculate optimal weights at each rebalancing period.
+    """
+
+    def __init__(self,
+                 rebalancing_period_days: int = 30,
+                 optimizer = None,
+                 optimization_method: str = 'mean_variance',
+                 **kwargs):
+        """
+        Initialize optimization-based rebalancing strategy.
+
+        Parameters:
+        -----------
+        rebalancing_period_days : int
+            Days between rebalancing
+        optimizer : PortfolioOptimizer
+            Optimizer instance to use
+        optimization_method : str
+            Optimization method name ('mean_variance', 'robust_mean_variance', etc.)
+        **kwargs : dict
+            Additional optimization parameters
+        """
+        super().__init__(rebalancing_period_days, **kwargs)
+        self.optimizer = optimizer
+        self.optimization_method = optimization_method
+        self.min_history_days = kwargs.get('min_history_days', 60)
+
+        if optimizer is None:
+            raise ValueError("optimizer required for OptimizedRebalancingStrategy")
+
+        logging.info(f"OptimizedRebalancingStrategy initialized: method={optimization_method}, "
+                    f"rebalance_days={rebalancing_period_days}")
+
+    def calculate_target_weights(self,
+                               current_weights: np.ndarray,
+                               period_returns: pd.Series,
+                               current_date: date,
+                               lookback_returns: Optional[pd.DataFrame] = None,
+                               **kwargs) -> np.ndarray:
+        """
+        Calculate optimal weights using portfolio optimizer.
+
+        Parameters:
+        -----------
+        current_weights : np.ndarray
+            Current portfolio weights
+        period_returns : pd.Series
+            Returns for current period (not used for optimization)
+        current_date : date
+            Current date
+        lookback_returns : pd.DataFrame, optional
+            Historical returns data for optimization (dates × assets)
+        **kwargs : dict
+            Additional parameters
+
+        Returns:
+        --------
+        np.ndarray of optimal weights
+        """
+        # Check if we have sufficient historical data
+        if lookback_returns is None or len(lookback_returns) < self.min_history_days:
+            logging.debug(f"OptimizedStrategy: Insufficient history ({len(lookback_returns) if lookback_returns is not None else 0} days), "
+                        f"using current weights")
+            return current_weights
+
+        try:
+            # Calculate mean returns and covariance matrix (pandas)
+            mean_returns = lookback_returns.mean() * 252  # Annualize
+            cov_matrix = lookback_returns.cov() * 252  # Annualize
+
+            # Optimize using PortfolioOptimizer (convert to numpy at boundary)
+            result = self.optimizer.optimize(
+                method=self.optimization_method,
+                mean_returns=mean_returns.values,  # pandas → numpy
+                cov_matrix=cov_matrix.values,      # pandas → numpy
+                **kwargs
+            )
+
+            # Check if optimization succeeded
+            if result['status'] == 'optimal':
+                optimal_weights = result['weights']  # Already numpy array
+                logging.debug(f"OptimizedStrategy: Successfully optimized to {self.optimization_method}")
+                return optimal_weights
+            else:
+                logging.warning(f"OptimizedStrategy: Optimization failed ({result.get('message', 'unknown')}), "
+                              f"using current weights")
+                return current_weights
+
+        except Exception as e:
+            logging.error(f"OptimizedStrategy: Error during optimization: {e}")
+            return current_weights
+
+
 class RebalancingStrategies:
     """
     Factory class for creating and managing different rebalancing strategies.
     """
-    
+
     def __init__(self):
         """Initialize the strategies factory."""
         self.available_strategies = {
@@ -399,9 +488,10 @@ class RebalancingStrategies:
             'target_weight': TargetWeightStrategy,
             'equal_weight': EqualWeightStrategy,
             'threshold': ThresholdRebalancingStrategy,
-            'spy_only': SpyOnlyStrategy
+            'spy_only': SpyOnlyStrategy,
+            'optimized': OptimizedRebalancingStrategy
         }
-        
+
         logging.info(f"RebalancingStrategies initialized with {len(self.available_strategies)} strategies")
     
     def create_strategy(self, 

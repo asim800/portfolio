@@ -1,23 +1,33 @@
 #!/usr/bin/env python3
 """
-Period management using pandas DataFrames and datetime indices.
-Provides clean interface for portfolio rebalancing periods.
+Period management using pandas resample() - clean and Pythonic!
+
+Uses pandas built-in resampling instead of manual date arithmetic.
+Much simpler, more flexible, and easier to maintain.
 """
 
 import pandas as pd
 import numpy as np
-from datetime import datetime, date, timedelta
+from datetime import datetime, date
 from typing import Dict, List, Tuple, Optional
 import logging
 
 import ipdb
 
+
 class PeriodManager:
     """
-    Manages rebalancing periods using pandas DatetimeIndex for clean period tracking.
+    Manages rebalancing periods using pandas resample().
+
+    Advantages over manual date arithmetic:
+    - Simpler code (uses pandas built-in functionality)
+    - Calendar-aligned periods (month-end, quarter-end, etc.)
+    - Flexible frequencies (monthly, weekly, quarterly, custom)
+    - Handles edge cases automatically (leap years, weekends, etc.)
+    - More Pythonic and maintainable
     """
 
-    def __init__(self, returns_data: pd.DataFrame, rebalancing_period_days: int = 30):
+    def __init__(self, returns_data: pd.DataFrame, frequency: str = 'ME'):
         """
         Initialize period manager with returns data.
 
@@ -25,64 +35,99 @@ class PeriodManager:
         -----------
         returns_data : pd.DataFrame
             Returns data with DatetimeIndex
-        rebalancing_period_days : int
-            Number of calendar days per rebalancing period
+        frequency : str, optional
+            Pandas resample frequency string (default: 'ME' for month-end)
+
+            Supports standard pandas frequencies AND custom multiples (e.g., '5T', '2W', '3ME').
+            Any valid pandas offset alias can be used.
+
+            Common frequencies:
+            Time-based:
+              'D'  : Calendar day
+              'W'  : Weekly
+              'ME' : Month end (recommended for monthly rebalancing)
+              'MS' : Month start
+              'Q'  : Quarter end
+              'QS' : Quarter start
+              'A'  : Year end
+              'AS' : Year start
+
+            Business day frequencies:
+              'B'   : Business day
+              'BME' : Business month end (replaces deprecated 'BM')
+              'BMS' : Business month start
+              'BQE' : Business quarter end (replaces deprecated 'BQ')
+              'BAE' : Business year end (replaces deprecated 'BA')
+
+            Custom periods (number + offset):
+              '5T'  : Every 5 minutes (intraday)
+              '21D' : Every 21 days
+              '2W'  : Bi-weekly (every 2 weeks)
+              '3ME' : Every 3 months (quarterly)
+              '6ME' : Semi-annual (every 6 months)
+              '10B' : Every 10 business days
+
+        Examples:
+        ---------
+        >>> # Monthly rebalancing (month-end)
+        >>> pm = PeriodManager(returns, frequency='ME')
+
+        >>> # Quarterly rebalancing
+        >>> pm = PeriodManager(returns, frequency='Q')
+
+        >>> # Every 21 calendar days
+        >>> pm = PeriodManager(returns, frequency='21D')
+
+        >>> # Bi-weekly rebalancing (every 2 weeks)
+        >>> pm = PeriodManager(returns, frequency='2W')
+
+        >>> # Every 3 months (quarterly using custom multiple)
+        >>> pm = PeriodManager(returns, frequency='3ME')
+
+        >>> # Business month-end (excludes weekends/holidays)
+        >>> pm = PeriodManager(returns, frequency='BME')
         """
         self.returns_data = returns_data.copy()
-        self.rebalancing_period_days = rebalancing_period_days
+        self.frequency = frequency
 
-        # Create period tracking DataFrame
-        self.periods_df = self._create_periods_dataframe()
+        # Create period tracking DataFrame using resample
+        self._create_period_groups()
 
-        logging.info(f"PeriodManager initialized: {len(self.periods_df)} periods of ~{rebalancing_period_days} days")
+        logging.info(f"PeriodManager initialized: {self.num_periods} periods (frequency={self.frequency})")
 
-    def _create_periods_dataframe(self) -> pd.DataFrame:
+    def _create_period_groups(self) -> None:
         """
-        Create DataFrame tracking all rebalancing periods with datetime indices.
+        Create period groupings using pandas resample() - elegant and simple!
 
-        Returns:
-        --------
-        DataFrame with columns: period_start, period_end, period_length, trading_days
+        This replaces 46 lines of manual date arithmetic with ~20 lines using
+        pandas built-in functionality.
         """
-        start_date = self.returns_data.index[0].date()
-        end_date = self.returns_data.index[-1].date()
+        # Group data by resampling frequency
+        grouped = self.returns_data.resample(self.frequency)
 
+        # Create period info for each group
         periods = []
-        current_start = start_date
-        period_num = 0
 
-        while current_start <= end_date:
-            current_end = current_start + timedelta(days=self.rebalancing_period_days - 1)
+        for period_num, (period_label, group_data) in enumerate(grouped):
+            if len(group_data) == 0:
+                continue  # Skip empty periods
 
-            # Don't go beyond available data
-            if current_end > end_date:
-                current_end = end_date
-
-            # Get actual trading days in this period
-            period_mask = ((self.returns_data.index.date >= current_start) &
-                          (self.returns_data.index.date <= current_end))
-            trading_days_in_period = period_mask.sum()
+            period_start = group_data.index[0]
+            period_end = group_data.index[-1]
 
             periods.append({
                 'period_num': period_num,
-                'period_start': pd.Timestamp(current_start),
-                'period_end': pd.Timestamp(current_end),
-                'period_length': (current_end - current_start).days + 1,
-                'trading_days': trading_days_in_period
+                'period_start': period_start,
+                'period_end': period_end,
+                'period_length': (period_end - period_start).days + 1,
+                'trading_days': len(group_data),
+                'label': period_label  # Resample label (for reference)
             })
 
-            # Move to next period
-            current_start = current_end + timedelta(days=1 )
-            period_num += 1
-
-            if current_start > end_date:
-                break
-
-        # Create DataFrame with period_num as index
-        df = pd.DataFrame(periods)
-        df.set_index('period_num', inplace=True)
-
-        return df
+        # Create DataFrame with period info
+        self.periods_df = pd.DataFrame(periods)
+        if not self.periods_df.empty:
+            self.periods_df.set_index('period_num', inplace=True)
 
     @property
     def num_periods(self) -> int:

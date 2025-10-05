@@ -14,10 +14,16 @@ class RebalancingConfig:
     """Configuration for dynamic portfolio rebalancing system."""
     
     # Rebalancing Parameters
-    rebalancing_period_days: int = 30  # Calendar days between rebalancing
+    rebalancing_frequency: str = 'ME'  # Pandas resample frequency string
+    # Standard: 'D', 'W', 'ME' (month-end), 'Q' (quarter), 'A' (annual)
+    # Custom multiples: '2W' (bi-weekly), '21D' (every 21 days), '3ME' (quarterly), '6ME' (semi-annual)
+    # Business day: 'B', 'BM' (business month-end), 'BQ' (business quarter-end)
     min_history_periods: int = 2  # Minimum periods needed before optimization starts
     use_expanding_window: bool = True  # True for expanding, False for rolling window
     rolling_window_periods: int = 6  # Only used if expanding_window = False
+
+    # Legacy support (deprecated - use rebalancing_frequency instead)
+    rebalancing_period_days: Optional[int] = None  # Kept for backward compatibility
     
     # Portfolio Configuration (simplified single portfolio mode)
     single_portfolio_mode: bool = False  # Run one optimization method by default
@@ -38,10 +44,10 @@ class RebalancingConfig:
         'equal_weight',      # Rebalance to equal weights each period
         'spy_only'           # 100% SPY allocation for market comparison
     ])
-    rebalancing_strategy_periods: Dict[str, int] = field(default_factory=lambda: {
-        'target_weight': 30,  # Rebalance every 30 days
-        'equal_weight': 30,   # Rebalance every 30 days
-        'threshold': 30       # Check threshold every 30 days
+    rebalancing_strategy_frequencies: Dict[str, str] = field(default_factory=lambda: {
+        'target_weight': 'ME',  # Rebalance monthly (month-end)
+        'equal_weight': 'ME',   # Rebalance monthly (month-end)
+        'threshold': 'ME'       # Check threshold monthly
     })
     
     # Legacy baseline configuration (for backward compatibility)
@@ -96,8 +102,19 @@ class RebalancingConfig:
     
     def __post_init__(self):
         """Validate configuration parameters after initialization."""
-        if self.rebalancing_period_days <= 0:
-            raise ValueError("rebalancing_period_days must be positive")
+        # Legacy support: convert rebalancing_period_days to frequency if provided
+        if self.rebalancing_period_days is not None:
+            import warnings
+            warnings.warn(
+                "rebalancing_period_days is deprecated. Use rebalancing_frequency instead "
+                "(e.g., 'ME' for monthly, 'Q' for quarterly). "
+                "See pandas resample documentation for all frequency options.",
+                DeprecationWarning,
+                stacklevel=2
+            )
+            # Keep the old value for compatibility but prefer frequency
+            if self.rebalancing_period_days <= 0:
+                raise ValueError("rebalancing_period_days must be positive")
         
         if self.min_history_periods < 1:
             raise ValueError("min_history_periods must be at least 1")
@@ -165,10 +182,10 @@ class RebalancingConfig:
             if strategy not in valid_strategies:
                 raise ValueError(f"Unknown rebalancing strategy '{strategy}'. Valid strategies: {valid_strategies}")
         
-        # Validate rebalancing periods
-        for strategy, period in self.rebalancing_strategy_periods.items():
-            if not isinstance(period, int) or period <= 0:
-                raise ValueError(f"Rebalancing period for '{strategy}' must be a positive integer")
+        # Validate rebalancing frequencies (basic validation - pandas will validate the actual frequency string)
+        for strategy, frequency in self.rebalancing_strategy_frequencies.items():
+            if not isinstance(frequency, str) or not frequency:
+                raise ValueError(f"Rebalancing frequency for '{strategy}' must be a non-empty string")
         
         # Validate dates
         try:
@@ -189,13 +206,18 @@ class RebalancingConfig:
         """Create configuration from dictionary."""
         return cls(**config_dict)
     
-    def get_period_length_days(self) -> int:
-        """Get the rebalancing period length in days."""
-        return self.rebalancing_period_days
-    
-    def get_min_history_days(self) -> int:
-        """Get minimum history required in days."""
-        return self.min_history_periods * self.rebalancing_period_days
+    def get_rebalancing_frequency(self) -> str:
+        """Get the rebalancing frequency string."""
+        return self.rebalancing_frequency
+
+    def get_rebalancing_period(self, strategy_name: str) -> str:
+        """
+        Get rebalancing frequency for a specific strategy.
+
+        Returns pandas frequency string (e.g., 'ME', 'Q', 'W').
+        """
+        # Use strategy-specific frequency if defined, otherwise use default
+        return self.rebalancing_strategy_frequencies.get(strategy_name, self.rebalancing_frequency)
     
     def is_method_enabled(self, method: str) -> bool:
         """Check if a specific optimization method is enabled."""
@@ -257,9 +279,9 @@ class RebalancingConfig:
             'max_tracking_error': self.max_tracking_error
         }
     
-    def get_rebalancing_period(self, strategy: str) -> int:
-        """Get rebalancing period for a specific strategy."""
-        return self.rebalancing_strategy_periods.get(strategy, 30)  # Default to 30 days
+    def get_rebalancing_period(self, strategy: str) -> str:
+        """Get rebalancing frequency for a specific strategy."""
+        return self.rebalancing_strategy_frequencies.get(strategy, self.rebalancing_frequency)
     
     def get_portfolio_names(self) -> List[str]:
         """Get list of all portfolio names that will be tracked."""

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Portfolio performance tracker using pandas DataFrames with datetime indices.
-Clean interface for tracking portfolio weights, returns, and metrics over time.
+Portfolio performance tracker - manages and compares multiple Portfolio instances.
+Clean interface for multi-portfolio comparison and analysis.
 """
 
 import pandas as pd
@@ -9,122 +9,122 @@ import numpy as np
 from typing import Dict, List, Tuple, Optional, Any
 from datetime import datetime, date
 import logging
+import os
 
 import ipdb
 
+
 class PortfolioTracker:
     """
-    Tracks portfolio performance using pandas DataFrames with datetime indices.
-    Much cleaner than the old list-based approach.
+    Manages and compares multiple Portfolio instances.
+
+    Simplified design: Portfolio objects own their data, PortfolioTracker
+    provides aggregation and comparison capabilities.
     """
 
-    def __init__(self, asset_names: List[str], portfolio_names: List[str]):
+    def __init__(self):
         """
         Initialize portfolio tracker.
 
+        Note: Portfolios are added via add_portfolio() method.
+        """
+        self.portfolios: Dict[str, Any] = {}  # name → Portfolio object
+
+        # Legacy compatibility: these are populated from Portfolio objects
+        self.asset_names: List[str] = []
+        self.portfolio_names: List[str] = []
+        self.weights_df: Optional[pd.DataFrame] = None
+        self.returns_df: Optional[pd.DataFrame] = None
+        self.cumulative_returns_df: Optional[pd.DataFrame] = None
+        self.portfolio_values_df: Optional[pd.DataFrame] = None
+        self.metrics_df: Optional[pd.DataFrame] = None
+
+        logging.info("PortfolioTracker initialized (multi-portfolio manager)")
+
+    def add_portfolio(self, name: str, portfolio) -> None:
+        """
+        Add a portfolio to track.
+
         Parameters:
         -----------
-        asset_names : List[str]
-            Names of assets in portfolios
-        portfolio_names : List[str]
-            Names of portfolios to track
+        name : str
+            Portfolio name (must match portfolio.name)
+        portfolio : Portfolio
+            Portfolio instance to track
         """
-        self.asset_names = asset_names
-        self.portfolio_names = portfolio_names
+        self.portfolios[name] = portfolio
+        self.portfolio_names.append(name)
 
-        # Initialize tracking DataFrames with MultiIndex columns
-        self._initialize_tracking_dataframes()
+        # Update asset names if first portfolio
+        if not self.asset_names:
+            self.asset_names = portfolio.asset_names
 
-    def _initialize_tracking_dataframes(self) -> None:
-        """Initialize the main tracking DataFrames."""
+        logging.info(f"PortfolioTracker: Added portfolio '{name}'")
 
-        # Portfolio weights over time (Date x Portfolio x Asset)
-        weights_columns = pd.MultiIndex.from_product(
-            [self.portfolio_names, self.asset_names],
+    def run_backtest(self, period_manager) -> None:
+        """
+        Run backtest on all portfolios.
+
+        Parameters:
+        -----------
+        period_manager : PeriodManager
+            Period manager with rebalancing schedule
+        """
+        if not self.portfolios:
+            raise RuntimeError("No portfolios added to tracker")
+
+        logging.info(f"PortfolioTracker: Running backtest on {len(self.portfolios)} portfolios")
+
+        # Run backtest on each portfolio
+        for name, portfolio in self.portfolios.items():
+            logging.info(f"PortfolioTracker: Running backtest for '{name}'")
+            portfolio.run_backtest(period_manager)
+
+        # Aggregate results for compatibility
+        self._aggregate_results()
+
+        logging.info("PortfolioTracker: Backtest complete for all portfolios")
+
+    def _aggregate_results(self) -> None:
+        """Aggregate results from all portfolios for legacy compatibility."""
+        if not self.portfolios:
+            return
+
+        # Aggregate returns
+        returns_dict = {}
+        for name, portfolio in self.portfolios.items():
+            returns_dict[name] = portfolio.returns_history
+
+        self.returns_df = pd.DataFrame(returns_dict)
+
+        # Aggregate cumulative returns
+        self.cumulative_returns_df = (1 + self.returns_df).cumprod()
+
+        # Aggregate portfolio values
+        values_dict = {}
+        for name, portfolio in self.portfolios.items():
+            values_dict[name] = portfolio.portfolio_values
+
+        self.portfolio_values_df = pd.DataFrame(values_dict)
+
+        # Aggregate weights (MultiIndex format for compatibility)
+        weights_data = {}
+        for name, portfolio in self.portfolios.items():
+            for asset in self.asset_names:
+                weights_data[(name, asset)] = portfolio.weights_history[asset]
+
+        weights_columns = pd.MultiIndex.from_tuples(
+            weights_data.keys(),
             names=['Portfolio', 'Asset']
         )
-        self.weights_df = pd.DataFrame(
-            index=pd.DatetimeIndex([], name='Date'),
-            columns=weights_columns
-        )
+        self.weights_df = pd.DataFrame(weights_data, columns=weights_columns)
 
-        # Portfolio returns over time (Date x Portfolio)
-        self.returns_df = pd.DataFrame(
-            index=pd.DatetimeIndex([], name='Date'),
-            columns=self.portfolio_names
-        )
+        logging.debug("PortfolioTracker: Aggregated results from all portfolios")
 
-        # Cumulative returns over time (Date x Portfolio)
-        self.cumulative_returns_df = pd.DataFrame(
-            index=pd.DatetimeIndex([], name='Date'),
-            columns=self.portfolio_names
-        )
-
-        # Portfolio values over time (Date x Portfolio) - starting from 100
-        self.portfolio_values_df = pd.DataFrame(
-            index=pd.DatetimeIndex([], name='Date'),
-            columns=self.portfolio_names
-        )
-
-        # Period-level performance metrics (Date x Portfolio x Metric)
-        metrics_columns = pd.MultiIndex.from_product(
-            [self.portfolio_names, ['period_return', 'sharpe_ratio', 'volatility', 'beta', 'max_drawdown']],
-            names=['Portfolio', 'Metric']
-        )
-        self.metrics_df = pd.DataFrame(
-            index=pd.DatetimeIndex([], name='Date'),
-            columns=metrics_columns
-        )
-
-        logging.info(f"PortfolioTracker initialized: {len(self.portfolio_names)} portfolios, "
-                    f"{len(self.asset_names)} assets")
-
-    def add_period_performance(self,
-                             period_start: pd.Timestamp,
-                             period_end: pd.Timestamp,
-                             portfolio_weights: Dict[str, pd.Series],
-                             portfolio_returns: Dict[str, float],
-                             portfolio_metrics: Optional[Dict[str, Dict[str, float]]] = None) -> None:
-        """
-        Add performance data for a specific period.
-
-        Parameters:
-        -----------
-        period_start : pd.Timestamp
-            Period start date
-        period_end : pd.Timestamp
-            Period end date (used as the index date)
-        portfolio_weights : Dict[str, pd.Series]
-            Portfolio weights for each portfolio as pandas Series
-        portfolio_returns : Dict[str, float]
-            Portfolio returns for each portfolio
-        portfolio_metrics : Optional[Dict[str, Dict[str, float]]]
-            Additional portfolio metrics for each portfolio
-        """
-        # Use period_end as the index date (when rebalancing occurs)
-        index_date = period_end
-
-        # Add weights - now works with pandas Series
-        for portfolio_name, weights in portfolio_weights.items():
-            if portfolio_name in self.portfolio_names:
-                for asset_name in self.asset_names:
-                    # Use pandas Series indexing instead of position-based indexing
-                    weight_value = weights.get(asset_name, 0.0) if isinstance(weights, pd.Series) else weights[asset_name]
-                    self.weights_df.loc[index_date, (portfolio_name, asset_name)] = weight_value
-
-        # Add returns
-        for portfolio_name, return_val in portfolio_returns.items():
-            if portfolio_name in self.portfolio_names:
-                self.returns_df.loc[index_date, portfolio_name] = return_val
-
-        if portfolio_metrics:
-            for portfolio_name, metrics in portfolio_metrics.items():
-                if portfolio_name in self.portfolio_names:
-                    for metric_name, metric_value in metrics.items():
-                        if metric_name in ['period_return', 'sharpe_ratio', 'volatility', 'beta', 'max_drawdown']:
-                            self.metrics_df.loc[index_date, (portfolio_name, metric_name)] = metric_value
-
-        logging.debug(f"Added performance data for {len(portfolio_weights)} portfolios on {index_date}")
+    # =========================================================================
+    # LEGACY COMPATIBILITY METHODS
+    # These delegate to Portfolio objects for backwards compatibility
+    # =========================================================================
 
     def get_portfolio_weights_history(self, portfolio_name: str) -> pd.DataFrame:
         """
@@ -139,10 +139,13 @@ class PortfolioTracker:
         --------
         DataFrame with dates as index and assets as columns
         """
-        if portfolio_name not in self.portfolio_names:
+        if portfolio_name not in self.portfolios:
+            # Fall back to aggregated data if available
+            if self.weights_df is not None and portfolio_name in self.portfolio_names:
+                return self.weights_df[portfolio_name].copy()
             raise ValueError(f"Portfolio '{portfolio_name}' not found")
 
-        return self.weights_df[portfolio_name].copy()
+        return self.portfolios[portfolio_name].weights_history.copy()
 
     def get_portfolio_returns_history(self, portfolio_name: str) -> pd.Series:
         """
@@ -157,17 +160,23 @@ class PortfolioTracker:
         --------
         Series with dates as index and returns as values
         """
-        if portfolio_name not in self.portfolio_names:
+        if portfolio_name not in self.portfolios:
+            # Fall back to aggregated data if available
+            if self.returns_df is not None and portfolio_name in self.portfolio_names:
+                return self.returns_df[portfolio_name].copy()
             raise ValueError(f"Portfolio '{portfolio_name}' not found")
 
-        return self.returns_df[portfolio_name].copy()
+        return self.portfolios[portfolio_name].returns_history.copy()
 
     def get_portfolio_cumulative_returns(self, portfolio_name: str) -> pd.Series:
         """Get cumulative returns for a specific portfolio."""
-        if portfolio_name not in self.portfolio_names:
+        if portfolio_name not in self.portfolios:
+            # Fall back to aggregated data if available
+            if self.cumulative_returns_df is not None and portfolio_name in self.portfolio_names:
+                return self.cumulative_returns_df[portfolio_name].copy()
             raise ValueError(f"Portfolio '{portfolio_name}' not found")
 
-        return self.cumulative_returns_df[portfolio_name].copy()
+        return (1 + self.portfolios[portfolio_name].returns_history).cumprod()
 
     def get_all_portfolio_returns(self) -> pd.DataFrame:
         """Get returns for all portfolios."""

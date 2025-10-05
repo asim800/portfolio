@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """
 Performance Engine for Portfolio Backtesting.
-Clean architecture replacing RebalancingEngine with proper separation of concerns.
+Simplified orchestration layer using Portfolio and PortfolioTracker.
 """
 
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Tuple, Optional, Any
-from datetime import datetime, date, timedelta
+from typing import Dict, List, Optional, Any
+from datetime import datetime
 import logging
 import os
 
@@ -15,356 +15,178 @@ from config import RebalancingConfig
 from portfolio_tracker import PortfolioTracker
 from portfolio_optimizer import PortfolioOptimizer
 from fin_data import FinData
-from rebalancing_strategies import RebalancingStrategies
+from portfolio import Portfolio
 from rebalancing_visualization import RebalancingVisualizer
 from period_manager import PeriodManager
 
 import ipdb
 
+
 class PerformanceEngine:
     """
-    Performance backtesting engine with clean architecture.
+    Performance backtesting engine - simplified orchestration layer.
 
-    Handles static and dynamic portfolio backtesting with unified data storage,
-    performance calculations, and visualization capabilities.
+    Creates Portfolio instances, runs backtests via PortfolioTracker,
+    and handles visualization and reporting.
     """
 
-    def __init__(self, data: FinData, optimizer: PortfolioOptimizer, config: RebalancingConfig):
-        """Initialize performance engine with data, optimizer and configuration."""
+    def __init__(self, data: FinData, config: RebalancingConfig):
+        """
+        Initialize performance engine with data and configuration.
+
+        Parameters:
+        -----------
+        data : FinData
+            Financial data manager
+        config : RebalancingConfig
+            Configuration for optimization and rebalancing
+        """
         self.data = data
-        self.optimizer = optimizer
         self.config = config
 
         # Core components
-        self.tracker: Optional[PortfolioTracker] = None
+        self.tracker = PortfolioTracker()
         self.visualizer = RebalancingVisualizer(config)
-        self.rebalancing_factory = RebalancingStrategies()
+        self.optimizer = PortfolioOptimizer(risk_free_rate=config.risk_free_rate)
 
         # Data storage
         self.returns_data: Optional[pd.DataFrame] = None
         self.asset_names: List[str] = []
-        self.baseline_weights: Optional[np.ndarray] = None
+        self.baseline_weights: Optional[pd.Series] = None
         self.period_manager: Optional[PeriodManager] = None
 
-        # Strategy management
-        self.active_strategies: Dict[str, Any] = {}
-        self.static_strategies: Dict[str, np.ndarray] = {}
-        self.dynamic_strategies: Dict[str, dict] = {}
+        # Portfolios
+        self.portfolios: Dict[str, Portfolio] = {}
 
-        # Track actual portfolio weights for buy-and-hold drift calculation
-        self.last_period_weights: Dict[str, np.ndarray] = {}  # {strategy: weights}
-
-        logging.info("PerformanceEngine initialized with clean architecture")
+        logging.info("PerformanceEngine initialized (simplified architecture)")
 
     def load_data(self, returns_data: pd.DataFrame, baseline_weights: np.ndarray) -> None:
-        """Load returns data and baseline weights."""
+        """
+        Load returns data and baseline weights.
+
+        Parameters:
+        -----------
+        returns_data : pd.DataFrame
+            Historical returns data (dates × assets)
+        baseline_weights : np.ndarray
+            Baseline portfolio weights
+        """
         self.returns_data = returns_data.copy()
         self.asset_names = list(returns_data.columns)
-        self.baseline_weights = baseline_weights.copy()
+
+        # Convert baseline weights to pandas Series
+        self.baseline_weights = pd.Series(baseline_weights, index=self.asset_names)
 
         # Validate data
         if len(baseline_weights) != len(self.asset_names):
             raise ValueError(f"Baseline weights length ({len(baseline_weights)}) "
                            f"doesn't match number of assets ({len(self.asset_names)})")
 
-        # Initialize period manager
+        # Initialize period manager with frequency
         self.period_manager = PeriodManager(
             returns_data,
-            rebalancing_period_days=self.config.rebalancing_period_days
-        )
-
-        # Initialize portfolio tracker
-        portfolio_names = self.config.get_portfolio_names()
-        self.tracker = PortfolioTracker(
-            asset_names=self.asset_names,
-            portfolio_names=portfolio_names
+            frequency=self.config.get_rebalancing_frequency()
         )
 
         logging.info(f"Loaded data: {len(returns_data)} days, {len(self.asset_names)} assets")
         logging.info(f"Created {self.period_manager.num_periods} rebalancing periods")
 
-    def add_static_strategy(self, strategy_name: str, weights: Optional[np.ndarray] = None) -> None:
-        """Add a static portfolio strategy."""
-        if weights is None:
-            if strategy_name == "equal_weight":
-                weights = np.ones(len(self.asset_names)) / len(self.asset_names)
-            elif strategy_name == "spy_only":
-                # Find SPY index
-                spy_idx = None
-                for i, asset in enumerate(self.asset_names):
-                    if asset.upper() == 'SPY':
-                        spy_idx = i
-                        break
-                if spy_idx is not None:
-                    weights = np.zeros(len(self.asset_names))
-                    weights[spy_idx] = 1.0
-                else:
-                    logging.warning("SPY not found in assets, using equal weights")
-                    weights = np.ones(len(self.asset_names)) / len(self.asset_names)
+        # Create portfolios
+        self._create_portfolios()
+
+    def _create_portfolios(self) -> None:
+        """Create all configured portfolios using factory methods."""
+        logging.info("Creating portfolios...")
+
+        # Create rebalancing strategy portfolios
+        for strategy_name in self.config.rebalancing_strategies:
+            rebalance_days = self.config.get_rebalancing_period(strategy_name)
+
+            if strategy_name == 'buy_and_hold':
+                portfolio = Portfolio.create_buy_and_hold(
+                    self.asset_names,
+                    self.baseline_weights,
+                    name=strategy_name
+                )
+            elif strategy_name == 'target_weight':
+                portfolio = Portfolio.create_target_weight(
+                    self.asset_names,
+                    self.baseline_weights,
+                    rebalance_days=rebalance_days,
+                    name=strategy_name
+                )
+            elif strategy_name == 'equal_weight':
+                portfolio = Portfolio.create_equal_weight(
+                    self.asset_names,
+                    rebalance_days=rebalance_days,
+                    name=strategy_name
+                )
+            elif strategy_name == 'spy_only':
+                portfolio = Portfolio.create_spy_only(
+                    self.asset_names,
+                    rebalance_days=rebalance_days,
+                    name=strategy_name
+                )
             else:
-                weights = self.baseline_weights.copy()
+                logging.warning(f"Unknown rebalancing strategy: {strategy_name}, skipping")
+                continue
 
-        self.static_strategies[strategy_name] = weights.copy()
-        logging.info(f"Added static strategy '{strategy_name}'")
+            # Ingest data
+            portfolio.returns_data = self.returns_data.copy()
 
-    def add_dynamic_strategy(self, optimization_method: str, rebalance_days: int = 30) -> None:
-        """Add a dynamic optimization strategy."""
-        self.dynamic_strategies[optimization_method] = {
-            'method': optimization_method,
-            'rebalance_days': rebalance_days
-        }
-        logging.info(f"Added dynamic strategy '{optimization_method}' with {rebalance_days}-day rebalancing")
+            # Add to tracker
+            self.portfolios[strategy_name] = portfolio
+            self.tracker.add_portfolio(strategy_name, portfolio)
+            logging.info(f"Created portfolio: {strategy_name}")
+
+        # Create optimized portfolios
+        for method in self.config.optimization_methods:
+            portfolio = Portfolio.create_optimized(
+                self.asset_names,
+                self.baseline_weights,
+                self.optimizer,
+                method=method,
+                rebalance_days=self.config.rebalancing_period_days,
+                name=method
+            )
+
+            # Ingest data
+            portfolio.returns_data = self.returns_data.copy()
+
+            # Add to tracker
+            self.portfolios[method] = portfolio
+            self.tracker.add_portfolio(method, portfolio)
+            logging.info(f"Created optimized portfolio: {method}")
+
+        logging.info(f"Created {len(self.portfolios)} portfolios total")
 
     def run_backtest(self, start_date: str, end_date: str) -> None:
-        """Run complete backtesting for all strategies."""
-        if self.tracker is None:
+        """
+        Run complete backtesting for all portfolios.
+
+        Much simpler now - just delegates to PortfolioTracker which runs each Portfolio.
+
+        Parameters:
+        -----------
+        start_date : str
+            Start date (for logging, not used in new architecture)
+        end_date : str
+            End date (for logging, not used in new architecture)
+        """
+        if self.period_manager is None:
             raise RuntimeError("Must call load_data() before run_backtest()")
 
         logging.info("Starting performance backtesting...")
+        logging.info(f"Running backtest from {start_date} to {end_date}")
 
-        # Initialize rebalancing strategies from config
-        self._initialize_rebalancing_strategies()
-
-        # Run backtest across all periods
-        cumulative_returns = {name: 1.0 for name in self.config.get_portfolio_names()}
-
-        for period_num, period_data, period_info in self.period_manager.iter_periods():
-            start_date = period_info['period_start'].date()
-            end_date = period_info['period_end'].date()
-
-            logging.info(f"Processing period {period_num}: {start_date} to {end_date} "
-                        f"({period_info['trading_days']} trading days)")
-
-            # Get current weights for all strategies
-            current_weights = self._get_period_weights(period_num, period_data)
-
-            # Calculate performance for each strategy
-            portfolio_weights = {}
-            portfolio_returns = {}
-
-            for portfolio_name, weights in current_weights.items():
-                # Calculate portfolio performance
-                performance = self._calculate_portfolio_performance(
-                    period_data, weights, portfolio_name
-                )
-
-
-                # Store results
-                portfolio_weights[portfolio_name] = pd.Series(weights, index=self.asset_names, name='weights')
-                portfolio_returns[portfolio_name] = performance['period_return']
-
-                # Update cumulative returns
-                cumulative_returns[portfolio_name] *= (1 + performance['period_return'])
- 
-                logging.debug(f"{portfolio_name}: {performance['period_return']:.2%} return")
-
-            # ipdb.set_trace()
-
-            # Add to tracker
-            if portfolio_weights and portfolio_returns:
-                self.tracker.add_period_performance(
-                    period_start=pd.Timestamp(start_date),
-                    period_end=pd.Timestamp(end_date),
-                    portfolio_weights=portfolio_weights,
-                    portfolio_returns=portfolio_returns
-                )
-
-        self.tracker.cumulative_returns_df = (1+self.tracker.returns_df).cumprod()
+        # Run backtest on all portfolios via tracker
+        self.tracker.run_backtest(self.period_manager)
 
         logging.info("Backtesting completed successfully")
 
-    def _initialize_rebalancing_strategies(self) -> None:
-        """Initialize rebalancing strategies from config."""
-        for strategy_name in self.config.rebalancing_strategies:
-            period = self.config.get_rebalancing_period(strategy_name)
-
-            if strategy_name == 'buy_and_hold':
-                # Buy and hold never rebalances
-                strategy = self.rebalancing_factory.create_strategy(
-                    'buy_and_hold',
-                    asset_names=self.asset_names,
-                    rebalancing_period_days=float('inf')
-                )
-            else:
-                strategy = self.rebalancing_factory.create_strategy(
-                    strategy_name,
-                    asset_names=self.asset_names,
-                    rebalancing_period_days=period
-                )
-
-            self.active_strategies[strategy_name] = strategy
-            logging.info(f"Initialized {strategy_name} strategy with {period}-day period")
-
-    def _get_period_weights(self, period_num: int, period_data: pd.DataFrame) -> Dict[str, np.ndarray]:
-        """Get portfolio weights for current period."""
-        current_weights = {}
-
-        # Get weights from rebalancing strategies
-        for strategy_name, strategy in self.active_strategies.items():
-            # Get period start and end dates
-            period_start = period_data.index[0].date()
-            period_end = period_data.index[-1].date()
-
-            # Handle weight calculation based on strategy type
-            if period_num == 0:
-                # First period - all strategies start with baseline weights
-                current_period_weights = self.baseline_weights.copy()
-            elif strategy_name == 'buy_and_hold':
-                # For buy-and-hold, calculate drifted weights from previous period
-                if strategy_name in self.last_period_weights:
-                    # Get the previous period's data and calculate drift
-                    prev_period_data = self._get_previous_period_data(period_num - 1)
-                    if prev_period_data is not None and not prev_period_data.empty:
-                        # Calculate how weights drifted based on returns
-                        prev_weights = self.last_period_weights[strategy_name]
-                        period_returns = prev_period_data.sum()  # Sum of daily returns for the period
-
-                        # Calculate new weights after drift: w_new = w_old * (1 + r) / sum(w_old * (1 + r))
-                        asset_values = prev_weights * (1 + period_returns)
-                        current_period_weights = asset_values / asset_values.sum()
-
-                        logging.debug(f"BuyAndHold drift: prev_weights={prev_weights} -> drifted_weights={current_period_weights}")
-                    else:
-                        current_period_weights = self.baseline_weights.copy()
-                else:
-                    current_period_weights = self.baseline_weights.copy()
-            else:
-                # Other strategies use baseline weights or their own logic
-                current_period_weights = self.baseline_weights.copy()
-
-            # Calculate target weights using the strategy
-            if strategy_name == 'spy_only':
-                # SpyOnlyStrategy needs period returns as a series
-                period_returns_series = period_data.mean()  # Use mean returns as proxy
-                weights = strategy.calculate_target_weights(
-                    current_weights=current_period_weights,
-                    period_returns=period_returns_series,
-                    current_date=period_end,
-                    baseline_weights=self.baseline_weights
-                )
-            else:
-                weights = strategy.calculate_target_weights(
-                    current_weights=current_period_weights,
-                    period_returns=period_data.mean(),  # Use mean returns as proxy
-                    current_date=period_end,
-                    target_weights=self.baseline_weights
-                )
-
-            current_weights[strategy_name] = weights
-
-            # Store weights for next period (especially important for buy-and-hold drift)
-            self.last_period_weights[strategy_name] = weights.copy()
-
-        # Get weights from optimization strategies
-        optimization_success = {}
-        if period_num >= self.config.min_history_periods:
-            # Sufficient history for optimization
-            for method in self.config.optimization_methods:
-                try:
-                    # Get historical data for optimization (expanding window)
-                    lookback_data = self._get_lookback_data(period_num)
-
-                    if len(lookback_data) >= self.config.min_history_periods:
-                        # Calculate mean returns and covariance
-                        mean_returns = lookback_data.mean() * 252  # Annualize
-                        cov_matrix = self.data.get_covariance_matrix(
-                            lookback_data, method=self.config.covariance_method
-                        )
-
-                        # Optimize portfolio
-                        result = self.optimizer.optimize(
-                            method=method,
-                            mean_returns=mean_returns,
-                            cov_matrix=cov_matrix,
-                            risk_aversion=self.config.risk_aversion,
-                            min_weight=self.config.min_weight,
-                            max_weight=self.config.max_weight
-                        )
-
-                        if result['success']:
-                            current_weights[method] = result['weights'].values
-                            optimization_success[method] = True
-                            logging.info(f"Successfully optimized {method} portfolio for period {period_num}")
-                        else:
-                            current_weights[method] = self.baseline_weights.copy()
-                            optimization_success[method] = False
-                            logging.warning(f"Optimization failed for {method}, using baseline weights")
-                    else:
-                        current_weights[method] = self.baseline_weights.copy()
-                        optimization_success[method] = False
-
-                except Exception as e:
-                    logging.error(f"Error optimizing {method} portfolio: {str(e)}")
-                    current_weights[method] = self.baseline_weights.copy()
-                    optimization_success[method] = False
-        else:
-            # Use baseline weights for early periods
-            logging.info(f"Using baseline weights for optimization methods in period {period_num} (insufficient history)")
-            for method in self.config.optimization_methods:
-                current_weights[method] = self.baseline_weights.copy()
-                optimization_success[method] = True
-
-        return current_weights
-
-    def _get_previous_period_data(self, period_num: int) -> Optional[pd.DataFrame]:
-        """Get data from a specific previous period for drift calculations."""
-        if self.period_manager is None or period_num < 0:
-            return None
-
-        try:
-            # Get the period data for the specified period
-            period_data = self.period_manager.get_period_data(period_num)
-            return period_data
-        except (IndexError, ValueError):
-            return None
-
-    def _get_lookback_data(self, period_num: int) -> pd.DataFrame:
-        """Get lookback data for optimization (expanding window)."""
-        if period_num <= 0:
-            # For first period, use minimal data
-            return self.returns_data.iloc[:30]  # Use first 30 days
-
-        # Get the end date of the previous period
-        period_info = self.period_manager.get_period_info(period_num - 1)
-        end_date = period_info['period_end']
-
-        if self.config.use_expanding_window:
-            # Use all data from start up to previous period end
-            lookback_data = self.returns_data[self.returns_data.index <= end_date]
-        else:
-            # Use rolling window - approximate 6 months back
-            window_days = self.config.rolling_window_periods * 20  # Approx 20 trading days per month
-            start_date = end_date - pd.Timedelta(days=window_days)
-            lookback_data = self.returns_data[
-                (self.returns_data.index >= start_date) &
-                (self.returns_data.index <= end_date)
-            ]
-
-        return lookback_data
-
-    def _calculate_portfolio_performance(self, period_data: pd.DataFrame,
-                                       weights: np.ndarray, portfolio_name: str) -> Dict[str, Any]:
-        """Calculate portfolio performance for a period."""
-        if period_data.empty:
-            return {
-                'period_return': 0.0,
-                'daily_returns': pd.Series([], dtype=float),
-                'notes': 'No trading data for period'
-            }
-
-        # Calculate daily portfolio returns
-        daily_portfolio_returns = period_data.dot(weights)
-
-        # Calculate period return (cumulative)
-        period_return = (1 + daily_portfolio_returns).prod() - 1
-
-        return {
-            'period_return': period_return,
-            'daily_returns': daily_portfolio_returns,
-            'notes': f'Period return calculated for {portfolio_name}'
-        }
-
-    # Performance Analysis Methods
+    # =========================================================================
+    # PERFORMANCE ANALYSIS AND REPORTING
+    # =========================================================================
     def get_performance_metrics(self) -> pd.DataFrame:
         """Get comprehensive performance metrics for all portfolios."""
         if self.tracker is None:
