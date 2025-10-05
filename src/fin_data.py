@@ -671,3 +671,116 @@ class FinData:
         }
         
         return method_params.get(method, {})
+
+    # =========================================================================
+    # MONTE CARLO RETURN SAMPLING METHODS
+    # =========================================================================
+
+    def sample_return_path(self,
+                          tickers: List[str],
+                          num_days: int,
+                          method: str = 'bootstrap',
+                          seed: Optional[int] = None) -> pd.DataFrame:
+        """
+        Sample synthetic return path for Monte Carlo simulation.
+
+        Parameters:
+        -----------
+        tickers : List[str]
+            List of ticker symbols
+        num_days : int
+            Number of days to sample
+        method : str
+            Sampling method: 'bootstrap' (resample with replacement) or 'parametric' (fit normal)
+        seed : Optional[int]
+            Random seed for reproducibility
+
+        Returns:
+        --------
+        pd.DataFrame
+            Sampled returns with same structure as historical returns
+        """
+        if seed is not None:
+            np.random.seed(seed)
+
+        # Get historical returns
+        historical_returns = self.get_returns_data(tickers)
+
+        if method == 'bootstrap':
+            # Bootstrap: randomly sample days with replacement
+            sampled_indices = np.random.choice(
+                len(historical_returns),
+                size=num_days,
+                replace=True
+            )
+            sampled_returns = historical_returns.iloc[sampled_indices].reset_index(drop=True)
+            return sampled_returns
+
+        elif method == 'parametric':
+            # Parametric: fit multivariate normal and sample
+            mean_returns = historical_returns.mean()
+            cov_matrix = historical_returns.cov()
+
+            # Sample from multivariate normal
+            sampled_array = np.random.multivariate_normal(
+                mean_returns.values,
+                cov_matrix.values,
+                size=num_days
+            )
+
+            sampled_returns = pd.DataFrame(
+                sampled_array,
+                columns=tickers
+            )
+            return sampled_returns
+
+        else:
+            raise ValueError(f"Unknown sampling method: {method}. Use 'bootstrap' or 'parametric'")
+
+    def sample_annual_returns(self,
+                             tickers: List[str],
+                             num_years: int,
+                             method: str = 'bootstrap',
+                             seed: Optional[int] = None,
+                             trading_days_per_year: int = 252) -> pd.DataFrame:
+        """
+        Sample annual return paths (convenience method).
+
+        Parameters:
+        -----------
+        tickers : List[str]
+            List of ticker symbols
+        num_years : int
+            Number of years to sample
+        method : str
+            Sampling method: 'bootstrap' or 'parametric'
+        seed : Optional[int]
+            Random seed for reproducibility
+        trading_days_per_year : int
+            Number of trading days per year (default: 252)
+
+        Returns:
+        --------
+        pd.DataFrame
+            DataFrame with num_years rows (one per year), columns = tickers
+        """
+        # Sample daily returns for all years
+        daily_returns = self.sample_return_path(
+            tickers,
+            num_days=num_years * trading_days_per_year,
+            method=method,
+            seed=seed
+        )
+
+        # Aggregate to annual returns
+        annual_returns = []
+        for year in range(num_years):
+            start_idx = year * trading_days_per_year
+            end_idx = start_idx + trading_days_per_year
+            year_daily = daily_returns.iloc[start_idx:end_idx]
+
+            # Calculate annual return: (1+r1)*(1+r2)*...*(1+r252) - 1
+            year_return = (1 + year_daily).prod() - 1
+            annual_returns.append(year_return)
+
+        return pd.DataFrame(annual_returns, columns=tickers)
