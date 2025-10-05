@@ -1,0 +1,46 @@
+{
+  "_comment": "Simple buy-and-hold test: backtest 2024-2025, then MC sim for accumulation+decumulation",
+
+  "start_date": "2024-01-01",
+  "end_date": "2025-09-19",
+  "ticker_file": "../tickers.txt",
+  "risk_free_rate": 0.02,
+
+  "retirement_date": "2035-01-01",
+  "simulation_horizon_date": null,
+  "simulation_horizon_years": 30,
+
+  "contribution_amount": 1000,
+  "contribution_frequency": "biweekly",
+  "employer_match_rate": 0.0,
+  "employer_match_cap": 10000,
+
+  "withdrawal_strategy": "constant_inflation_adjusted",
+  "annual_withdrawal_amount": 40000,
+  "withdrawal_percentage": null,
+  "inflation_rate": 0.03,
+  "withdrawal_strategy_params": {},
+
+  "min_history_periods": 2,
+  "use_expanding_window": true,
+  "rolling_window_periods": 6,
+
+  "metrics_to_track": [
+    "returns",
+    "volatility",
+    "sharpe_ratio",
+    "max_drawdown",
+    "calmar_ratio",
+    "gain_pain_ratio",
+    "beta",
+    "total_weight"
+  ],
+
+  "save_plots": true,
+  "show_plots_interactive": false,
+  "close_plots_after_save": false,
+  "plots_directory": "../plots/test",
+
+  "save_results": true,
+  "results_directory": "../results/test"
+}

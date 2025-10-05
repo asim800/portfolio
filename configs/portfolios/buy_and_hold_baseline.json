@@ -1,0 +1,36 @@
+{
+  "name": "buy_and_hold_baseline",
+  "description": "Static buy-and-hold baseline - never rebalances",
+
+  "strategy_type": "buy_and_hold",
+  "rebalancing_frequency": "ME",
+
+  "initial_weights": {
+    "AAPL": 0.2,
+    "GOOGL": 0.2,
+    "MSFT": 0.2,
+    "AMZN": 0.2,
+    "NVDA": 0.2
+  },
+
+  "optimization_method": null,
+  "risk_aversion": 1.0,
+  "uncertainty_level": 0.1,
+
+  "covariance_method": "sample",
+  "covariance_params": {},
+
+  "long_only": true,
+  "min_weight": 0.001,
+  "max_weight": 0.4,
+  "max_concentration": 0.6,
+  "sector_constraints": {},
+  "max_turnover": null,
+  "max_volatility": null,
+  "max_tracking_error": null,
+
+  "transaction_costs": 0.0,
+
+  "cash_percentage": 0.0,
+  "cash_interest_rate": 0.03
+}

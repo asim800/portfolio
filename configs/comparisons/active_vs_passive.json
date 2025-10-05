@@ -1,0 +1,31 @@
+{
+  "name": "active_vs_passive",
+  "description": "Compare active optimization strategies against passive baselines",
+
+  "portfolios": [
+    "portfolios/buy_and_hold_baseline.json",
+    "portfolios/target_weight_monthly.json",
+    "portfolios/spy_benchmark.json",
+    "portfolios/optimized_mean_variance.json",
+    "portfolios/optimized_robust.json"
+  ],
+
+  "comparison_pairs": [
+    ["buy_and_hold_baseline", "optimized_mean_variance"],
+    ["buy_and_hold_baseline", "optimized_robust"],
+    ["spy_benchmark", "optimized_mean_variance"],
+    ["target_weight_monthly", "optimized_mean_variance"]
+  ],
+
+  "output_prefix": "active_vs_passive",
+  "output_subdirectory": "active_vs_passive",
+
+  "include_statistical_tests": true,
+  "include_rolling_metrics": false,
+  "rolling_window_periods": 12,
+
+  "plot_cumulative_returns": true,
+  "plot_drawdowns": true,
+  "plot_weights": false,
+  "plot_rebalancing_events": true
+}

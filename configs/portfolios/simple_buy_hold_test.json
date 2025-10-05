@@ -1,0 +1,33 @@
+{
+  "name": "simple_buy_hold_test",
+  "description": "Simple buy-and-hold for testing - weekly tracking, no rebalancing",
+
+  "strategy_type": "buy_and_hold",
+  "rebalancing_frequency": "W",
+
+  "initial_weights": {
+    "SPY": 0.6,
+    "AGG": 0.4
+  },
+
+  "optimization_method": null,
+  "risk_aversion": 1.0,
+  "uncertainty_level": 0.1,
+
+  "covariance_method": "sample",
+  "covariance_params": {},
+
+  "long_only": true,
+  "min_weight": 0.001,
+  "max_weight": 1.0,
+  "max_concentration": 1.0,
+  "sector_constraints": {},
+  "max_turnover": null,
+  "max_volatility": null,
+  "max_tracking_error": null,
+
+  "transaction_costs": 0.0,
+
+  "cash_percentage": 0.0,
+  "cash_interest_rate": 0.03
+}

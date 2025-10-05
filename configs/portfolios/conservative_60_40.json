@@ -1,0 +1,30 @@
+{
+  "name": "conservative_60_40",
+  "description": "Conservative mixed portfolio: 40% cash, 60% mean-variance optimized equity",
+
+  "strategy_type": "optimized",
+  "rebalancing_frequency": "ME",
+
+  "initial_weights": {},
+
+  "optimization_method": "mean_variance",
+  "risk_aversion": 2.0,
+  "uncertainty_level": 0.1,
+
+  "covariance_method": "sample",
+  "covariance_params": {},
+
+  "long_only": true,
+  "min_weight": 0.001,
+  "max_weight": 0.25,
+  "max_concentration": 0.4,
+  "sector_constraints": {},
+  "max_turnover": null,
+  "max_volatility": null,
+  "max_tracking_error": null,
+
+  "transaction_costs": 0.0,
+
+  "cash_percentage": 0.4,
+  "cash_interest_rate": 0.03
+}

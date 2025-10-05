@@ -1,0 +1,27 @@
+{
+  "name": "conservative_strategies",
+  "description": "Compare conservative portfolio strategies",
+
+  "portfolios": [
+    "portfolios/buy_and_hold_baseline.json",
+    "portfolios/conservative_60_40.json",
+    "portfolios/spy_benchmark.json"
+  ],
+
+  "comparison_pairs": [
+    ["buy_and_hold_baseline", "conservative_60_40"],
+    ["spy_benchmark", "conservative_60_40"]
+  ],
+
+  "output_prefix": "conservative",
+  "output_subdirectory": "conservative",
+
+  "include_statistical_tests": true,
+  "include_rolling_metrics": true,
+  "rolling_window_periods": 6,
+
+  "plot_cumulative_returns": true,
+  "plot_drawdowns": true,
+  "plot_weights": true,
+  "plot_rebalancing_events": true
+}

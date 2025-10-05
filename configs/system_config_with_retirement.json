@@ -1,0 +1,41 @@
+{
+  "_comment": "Example system config with retirement Monte Carlo simulation and withdrawal strategy",
+
+  "start_date": "2024-01-01",
+  "end_date": "2034-01-01",
+  "ticker_file": "../tickers.txt",
+  "risk_free_rate": 0.02,
+
+  "retirement_date": "2034-01-01",
+  "simulation_horizon_date": null,
+  "simulation_horizon_years": 25,
+
+  "withdrawal_strategy": "constant_inflation_adjusted",
+  "annual_withdrawal_amount": 40000,
+  "withdrawal_percentage": null,
+  "inflation_rate": 0.03,
+  "withdrawal_strategy_params": {},
+
+  "min_history_periods": 2,
+  "use_expanding_window": true,
+  "rolling_window_periods": 6,
+
+  "metrics_to_track": [
+    "returns",
+    "volatility",
+    "sharpe_ratio",
+    "max_drawdown",
+    "calmar_ratio",
+    "gain_pain_ratio",
+    "beta",
+    "total_weight"
+  ],
+
+  "save_plots": true,
+  "show_plots_interactive": true,
+  "close_plots_after_save": false,
+  "plots_directory": "../plots/rebalancing",
+
+  "save_results": true,
+  "results_directory": "../results/rebalancing"
+}
