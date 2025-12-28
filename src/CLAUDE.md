@@ -49,20 +49,24 @@ This is a comprehensive **portfolio lifecycle simulation and analysis system** t
 **Key Files**:
 - **Entry point**: `visualize_mc_lifecycle.py` - Run this to see everything in action
 - **Path generation**: `mc_path_generator.py:MCPathGenerator` - Creates correlated asset return paths
-- **Configuration**: `test_simple_buyhold.json` + `system_config.py:SystemConfig` - All parameters
-- **Validation**: Run `uv run python test_mc_validation.py` to verify system integrity
+- **Configuration**: `configs/test_simple_buyhold.json` + `system_config.py:SystemConfig` - All parameters
+- **Simulated data**: `simulated_data_params.py` - Test parameters for validation (mean returns, covariance matrices)
+- **Validation test**: `test_mc_validation.py` - Complete lifecycle validation with regime shifts and time-varying parameters
+- **Parameter generation**: `generate_simulated_params.py` - Creates CSV/text files for simulated data
 
 **Critical Concepts**:
 1. **Asset-level paths** (not portfolio-level) - Enables comparing multiple portfolios on same market scenarios
 2. **Continuous lifecycle paths** - Accumulation and decumulation use ONE continuous random sequence (no gap)
-3. **Period-level simulation** - Simulate at contribution frequency (biweekly/monthly), not annual
+3. **Frequency mismatch support** - Can simulate at high frequency (weekly) while contributions/withdrawals happen at lower frequency (biweekly)
 4. **Time-varying parameters** - Mean/covariance can change over time (regime switching, adaptive estimation)
+5. **Configuration-driven** - All settings (simulations, frequencies, file paths) controlled via JSON and SystemConfig
 
 **Common Gotchas**:
 - Covariance scales **linearly** with time: `cov_period = cov_annual / periods_per_year` (NOT sqrt!)
 - Compound sub-annual returns: `(1+r1)*(1+r2)*...-1` (NOT `r1+r2+...`)
 - Employer match cap is **annual**, reset each year
 - Always use continuous paths via `generate_lifecycle_paths()` (NOT `generate_paths()` twice)
+- **Visualization dates must match output frequency** - If simulations output at biweekly checkpoints, create dates array at biweekly frequency (not simulation frequency)
 
 **Output**: Percentile fan charts showing range of possible outcomes, success rate, final value distributions
 
@@ -821,26 +825,33 @@ uv run python visualize_mc_lifecycle.py
 #### File Structure
 ```
 src/
-├── system_config.py              # Global configuration (retirement dates, contributions, withdrawals)
-├── portfolio_config.py           # Per-portfolio configuration (rebalancing, optimization)
-├── comparison_config.py          # Experimental comparison configuration
-├── mc_path_generator.py          # Asset-level multivariate Gaussian MC path generator
-├── visualize_mc_lifecycle.py     # Monte Carlo lifecycle simulation + visualization
-├── test_simple_buyhold.json      # Example configuration file
-├── test_simple_buyhold_mc.py     # Test script for backtest + MC workflow
-├── fin_data.py                   # Market data fetching with pickle caching
-├── portfolio.py                  # Core portfolio class with tracking
-├── ../docs/RUN_MC_TEST.md                # Validation walkthrough guide
-├── ../docs/VALIDATE_MC_PATHS.md          # Step-by-step MC validation guide
-├── ../docs/MC_QUICK_REFERENCE.md         # Quick reference cheat sheet
-├── ../docs/TIME_VARYING_PARAMS_GUIDE.md  # Time-varying parameters complete guide
-├── test_mc_validation.py         # Automated validation script
-├── test_continuous_paths.py      # Continuous lifecycle paths test
-└── test_time_varying_params.py   # Time-varying parameters test
+├── system_config.py                # Global configuration (5 important dates, contributions, withdrawals)
+├── portfolio_config.py             # Per-portfolio configuration (rebalancing, optimization)
+├── comparison_config.py            # Experimental comparison configuration
+├── mc_path_generator.py            # Asset-level multivariate Gaussian MC path generator
+├── visualize_mc_lifecycle.py       # Monte Carlo lifecycle simulation + visualization
+├── test_mc_validationv4a.py        # Complete lifecycle validation with date-based plots
+├── test_mc_validationv4b.py        # Enhanced validation with mc_start_date (current test)
+├── test_continuous_paths.py        # Continuous lifecycle paths test
+├── test_time_varying_params.py     # Time-varying parameters test
+├── fin_data.py                     # Market data fetching with pickle caching
+├── portfolio.py                    # Core portfolio class with tracking
+└── visualize_covariance_matrices.py  # Covariance matrix evolution visualization
 
-plots/test/                       # Generated MC visualizations
-results/test/                     # Backtest results (CSV)
-data/                             # Cached MC paths (optional, for reuse)
+configs/
+└── test_simple_buyhold.json        # Example configuration file (5-date system)
+
+../docs/
+├── VALIDATE_MC_PATHS.md            # Step-by-step MC validation guide
+├── MC_QUICK_REFERENCE.md           # Quick reference cheat sheet
+└── TIME_VARYING_PARAMS_GUIDE.md    # Time-varying parameters complete guide
+
+plots/test/                         # Generated MC visualizations
+├── mc_validationv3_lifecycle.png   # 2x2 grid: accumulation/decumulation/distributions/spaghetti
+└── mc_validationv3_covariance.png  # Covariance matrix evolution over time
+
+results/test/                       # Backtest results (CSV)
+data/                               # Cached MC paths (optional, for reuse)
 ```
 
 #### Core Components
@@ -851,15 +862,18 @@ data/                             # Cached MC paths (optional, for reuse)
 class SystemConfig:
     """Global configuration for entire backtesting/simulation system"""
 
-    # Backtest period
-    start_date: str                          # e.g., '2024-01-01'
-    end_date: str                            # e.g., '2025-09-19'
+    # Historical data period (for parameter estimation)
+    start_date: str                          # e.g., '2024-01-01' - historical data start
+    end_date: str                            # e.g., '2025-09-19' - historical data end
     ticker_file: str = '../tickers.txt'
 
-    # Retirement/Lifecycle dates
-    retirement_date: Optional[str] = None    # End of accumulation phase
+    # Monte Carlo simulation dates (5 important dates system)
+    mc_start_date: Optional[str] = None      # MC simulation start (defaults to end_date)
+    retirement_date: Optional[str] = None    # End of accumulation / start of decumulation
     simulation_horizon_date: Optional[str] = None  # End of decumulation
     simulation_horizon_years: Optional[int] = None # Alternative to horizon_date
+
+    initial_portfolio_value: float = 100_000  # Initial portfolio value for MC simulations
 
     # Periodic contributions (accumulation phase)
     contribution_amount: Optional[float] = None    # Per-period amount (e.g., $1000 biweekly)
@@ -871,6 +885,7 @@ class SystemConfig:
     withdrawal_strategy: Optional[str] = None     # None = no decumulation
     annual_withdrawal_amount: Optional[float] = None
     withdrawal_percentage: Optional[float] = None
+    withdrawal_frequency: str = 'biweekly'        # 'weekly', 'biweekly', 'monthly', 'quarterly', 'annual'
     inflation_rate: float = 0.03
 
     # Output settings
@@ -881,11 +896,12 @@ class SystemConfig:
 ```
 
 **Key Methods**:
-- `get_accumulation_years()`: Calculate years between end_date and retirement_date
+- `get_mc_start_date()`: Get MC simulation start date (returns mc_start_date or end_date if not set)
+- `get_accumulation_years()`: Calculate years between mc_start_date and retirement_date
 - `get_decumulation_years()`: Calculate years from retirement to simulation horizon
 - `get_contribution_config()`: Return dict with contribution details or None
-- `get_withdrawal_config()`: Return dict with withdrawal strategy or None
-- `from_json(path)`: Load configuration from JSON file (filters '_comment' fields)
+- `get_withdrawal_config()`: Return dict with withdrawal strategy and frequency or None
+- `from_json(path)`: Load configuration from JSON file (filters fields starting with '_')
 
 **2. mc_path_generator.py** - Asset-Level MC Path Generator
 ```python
@@ -1143,24 +1159,37 @@ paths = path_generator.generate_paths_time_varying(
 ```
 
 **3. test_simple_buyhold.json** - Example Configuration
+
+**Five Important Dates in the System**:
+1. **start_date**: Start of historical data period (for parameter estimation)
+2. **end_date**: End of historical data period (for parameter estimation)
+3. **mc_start_date**: Start of Monte Carlo simulation (if not set, defaults to end_date)
+4. **retirement_date**: End of accumulation phase / start of decumulation phase
+5. **simulation_horizon_date** or **simulation_horizon_years**: End of decumulation phase
+
+Timeline: `[start_date --- historical data --- end_date] → [mc_start_date --- accumulation --- retirement_date --- decumulation --- horizon]`
+
 ```json
 {
   "_comment": "Simple buy-and-hold test: backtest 2024-2025, then MC sim",
+  "_dates_description": "start_date/end_date: historical data period, mc_start_date: MC sim start, retirement_date: end of accumulation, simulation_horizon: end of decumulation",
 
   "start_date": "2024-01-01",
   "end_date": "2025-09-19",
+  "mc_start_date": "2025-10-01",
   "ticker_file": "../tickers.txt",
 
-  "retirement_date": "2035-01-01",
-  "simulation_horizon_years": 30,
+  "retirement_date": "2034-01-01",
+  "simulation_horizon_years": 20,
 
-  "contribution_amount": 1000,
+  "contribution_amount": 0,
   "contribution_frequency": "biweekly",
-  "employer_match_rate": 0.5,
+  "employer_match_rate": 0.0,
   "employer_match_cap": 10000,
 
   "withdrawal_strategy": "constant_inflation_adjusted",
   "annual_withdrawal_amount": 40000,
+  "withdrawal_frequency": "biweekly",
   "inflation_rate": 0.03,
 
   "save_plots": true,
@@ -1169,7 +1198,7 @@ paths = path_generator.generate_paths_time_varying(
   "results_directory": "../results/test"
 }
 ```
-**Note**: Fields starting with `_` (like `_comment`) are automatically filtered during loading.
+**Note**: Fields starting with `_` (like `_comment`, `_dates_description`) are automatically filtered during loading.
 
 ### Key Concepts
 
@@ -1291,10 +1320,48 @@ if employer_match_cap is not None:
    - Nearest-neighbor date matching for parameter lookup
    - Validated: test_time_varying_params.py confirms regime transitions and volatility changes
    - Documentation: ../docs/TIME_VARYING_PARAMS_GUIDE.md with complete examples
-5. **Validation documentation**:
+6. **Validation documentation**:
    - Created ../docs/VALIDATE_MC_PATHS.md - Step-by-step validation walkthrough
    - Created test_mc_validation.py - Automated validation script
    - Created ../docs/MC_QUICK_REFERENCE.md - Quick reference cheat sheet
+
+**Recent Updates (2025-10-06)**:
+1. **Vectorized accumulation simulation** (PERFORMANCE):
+   - Removed outer loop over simulations in `run_accumulation_mc()`
+   - Employer match is deterministic (doesn't depend on returns), enabling full vectorization
+   - Performance: ~88 million calculations/second for 10K simulations
+   - All operations now use numpy broadcasting for maximum efficiency
+2. **Return all period values** (CONSISTENCY):
+   - Both `run_accumulation_mc()` and `run_decumulation_mc()` now return values at every period
+   - Previously only returned year boundary values
+   - Enables smooth visualization without manual recalculation
+   - Single source of truth - no duplicate portfolio calculation logic
+3. **Complete lifecycle visualization** (VISUALIZATION):
+   - Added spaghetti plot spanning both accumulation and decumulation phases
+   - Shows continuous paths through retirement transition
+   - Date-based x-axis for intuitive timeline (not period numbers)
+   - Date formatting: YYYY-MM with major ticks every 2 years
+   - Rotated labels (45°) for better readability
+4. **Simulated data option** (TESTING):
+   - Added `USE_SIMULATED_DATA` flag to test_mc_validationv4a.py
+   - Controlled parameters with known mean/covariance for validation
+   - Uses same ticker names as historical data for consistency
+   - Enables testing without Yahoo Finance dependency
+5. **Configuration-driven system** (ARCHITECTURE):
+   - Added `initial_portfolio_value` to SystemConfig (default $100K)
+   - Added `withdrawal_frequency` to SystemConfig (default biweekly)
+   - Added `mc_start_date` to SystemConfig (defaults to end_date if not set)
+   - Five important dates now clearly defined in JSON config
+   - All hardcoded values moved to system-level configuration
+6. **Five Important Dates System** (CLARITY):
+   - **start_date**: Historical data start (for parameter estimation)
+   - **end_date**: Historical data end (for parameter estimation)
+   - **mc_start_date**: Monte Carlo simulation start (accumulation begins)
+   - **retirement_date**: Accumulation end / decumulation start
+   - **simulation_horizon**: Decumulation end (via date or years from retirement)
+   - Timeline: `[start_date --- historical --- end_date] → [mc_start_date --- accumulation --- retirement_date --- decumulation --- horizon]`
+   - Updated `get_accumulation_years()` to use mc_start_date instead of end_date
+   - Added `get_mc_start_date()` helper method with fallback logic
 
 ### 🚧 Future Work
 
@@ -1411,6 +1478,70 @@ Validate against known studies and historical periods:
 
 ---
 
+## Recent Improvements (2025-10-12)
+
+### Code Cleanup and Refactoring
+
+**Test Validation System**:
+- ✅ Cleaned up `test_mc_validation.py` - reduced from 530 to 422 lines (-20%)
+- ✅ Removed dead code, commented-out blocks, unused portfolio objects
+- ✅ Extracted configuration to proper files (`simulated_data_params.py`)
+- ✅ Added comprehensive module and function docstrings
+- ✅ All settings now controlled via `SystemConfig` and JSON
+
+**Simulated Data Management**:
+- ✅ Created `simulated_data_params.py` - centralized test parameters
+  - Mean returns (accumulation/decumulation regimes)
+  - Covariance matrices (4×4 for 4 assets, 2 regimes)
+  - Helper functions: `get_accumulation_params()`, `get_decumulation_params()`
+- ✅ Added save/load functions for parameter persistence:
+  - `save_mean_returns_to_csv()` - saves to CSV (pandas-readable)
+  - `save_cov_matrices_to_txt()` - saves 3D array (2, 4, 4) to text
+  - `load_mean_returns_from_csv()` - loads mean returns
+  - `load_cov_matrices_from_txt()` - loads 3D covariance array
+  - `save_all_parameters()` / `load_all_parameters()` - convenience wrappers
+- ✅ Created `generate_simulated_params.py` - script to generate parameter files
+- ✅ Generated files:
+  - `../data/simulated_mean_returns.csv` - 2 rows (regimes) × 4 columns (tickers)
+  - `../data/simulated_cov_matrices.txt` - 2×(4×4) covariance matrices
+
+**Configuration Enhancements**:
+- ✅ Added to `system_config.py`:
+  - `num_mc_simulations: int = 1000` - number of MC simulations
+  - `use_simulated_data: bool = False` - use simulated vs historical data
+  - `mc_reindex_method: str = 'ffill'` - time-varying parameter reindex method
+  - `simulated_mean_returns_file: str` - path to mean returns CSV
+  - `simulated_cov_matrices_file: str` - path to covariance text file
+- ✅ Updated `test_simple_buyhold.json` with validation settings
+
+**Visualization Fix - Frequency Mismatch**:
+- ✅ **Problem**: X-axis misalignment in plots due to frequency mismatch
+  - Simulation frequency: weekly (52/year) → paths generated at 52/year
+  - Contribution/withdrawal frequency: biweekly (26/year) → values output at 26/year
+  - Dates array was created at simulation frequency (weekly)
+  - But simulation functions output at contribution frequency (biweekly)
+  - Result: 1457 dates vs 729 values → misaligned plots
+- ✅ **Solution**: Create dates array using contribution/withdrawal frequency
+  - Changed from `dates = pd.date_range(..., freq=simulation_frequency)`
+  - To `dates = pd.date_range(..., freq=contribution_frequency)`
+  - Now dates array has 729 biweekly dates matching 729 output values
+- ✅ **Dynamic xlabel**: Plot 1 now shows "Period (weekly)" dynamically based on `config.simulation_frequency`
+- ✅ **Result**: All plots (top-right time-varying, bottom-right spaghetti) now have aligned x-axes
+
+**Key Insight - Intentional Frequency Mismatch**:
+The system supports **intentional frequency mismatch** between path generation and cash flows:
+- **Simulation frequency** (`simulation_frequency`): How often paths are sampled (e.g., weekly for high resolution)
+- **Contribution frequency** (`contribution_frequency`): How often contributions occur (e.g., biweekly, realistic payroll)
+- **Withdrawal frequency** (`withdrawal_frequency`): How often withdrawals occur (e.g., biweekly, realistic spending)
+- **Visualization frequency**: Must match the OUTPUT frequency (contribution/withdrawal checkpoints, NOT simulation frequency)
+
+This design allows:
+- High-resolution path generation (weekly/daily) for accurate market modeling
+- Realistic cash flow frequencies (biweekly/monthly) matching real-world schedules
+- Efficient computation (fewer checkpoints to store/visualize than simulation steps)
+
+---
+
 ## Code Quality Standards
 
 When working on lifecycle simulation code:
@@ -1422,3 +1553,4 @@ When working on lifecycle simulation code:
 5. **Modular Design**: Components work independently and compose cleanly
 6. **Clear Examples**: Working configurations and test scripts
 7. **Performance**: Optimize for large simulations (vectorize operations, use numpy efficiently)
+8. **Configuration-Driven**: All settings centralized in `SystemConfig` and JSON files (no magic numbers)

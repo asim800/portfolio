@@ -13,16 +13,16 @@ from datetime import datetime, date
 import logging
 import os
 
-from allocation_strategies import (
+from src.strategies.allocation import (
     AllocationStrategy, StaticAllocation, EqualWeight,
     SingleAsset, OptimizedAllocation
 )
-from rebalancing_triggers import (
+from src.strategies.rebalancing import (
     RebalancingTrigger, Never, Periodic, Threshold,
     EventDriven, Combined
 )
-from portfolio_optimizer import PortfolioOptimizer
-from fin_data import FinData
+from src.engine.optimizer import PortfolioOptimizer
+from src.data import FinData
 
 
 class Portfolio:

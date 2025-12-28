@@ -11,13 +11,13 @@ from datetime import datetime
 import logging
 import os
 
-from config import RebalancingConfig
-from portfolio_tracker import PortfolioTracker
-from portfolio_optimizer import PortfolioOptimizer
-from fin_data import FinData
-from portfolio import Portfolio
-from rebalancing_visualization import RebalancingVisualizer
-from period_manager import PeriodManager
+from src.config import RebalancingConfig
+from src.metrics.tracker import PortfolioTracker
+from src.engine.optimizer import PortfolioOptimizer
+from src.data import FinData
+from src.engine.portfolio import Portfolio
+from src.visualization.backtest import RebalancingVisualizer
+from src.engine.period_manager import PeriodManager
 
 import ipdb
 

@@ -1,16 +1,21 @@
 {
   "_comment": "Simple buy-and-hold test: backtest 2024-2025, then MC sim for accumulation+decumulation",
+  "_dates_description": "start_date/end_date: historical data period, mc_start_date: MC sim start, retirement_date: end of accumulation, simulation_horizon: end of decumulation",
 
   "start_date": "2024-01-01",
   "end_date": "2025-09-19",
-  "ticker_file": "../tickers.txt",
+  "mc_start_date": "2025-10-01",
+  "ticker_file": "tickers.txt",
   "risk_free_rate": 0.02,
 
-  "retirement_date": "2035-01-01",
+  "retirement_date": "2034-01-01",
   "simulation_horizon_date": null,
-  "simulation_horizon_years": 30,
+  "simulation_horizon_years": 20,
+  "decumulation_horizon_years": 20,
+  "initial_portfolio_value": 1000000,
+  "simulation_frequency": "weekly",
 
-  "contribution_amount": 1000,
+  "contribution_amount": 0,
   "contribution_frequency": "biweekly",
   "employer_match_rate": 0.0,
   "employer_match_cap": 10000,
@@ -18,6 +23,7 @@
   "withdrawal_strategy": "constant_inflation_adjusted",
   "annual_withdrawal_amount": 40000,
   "withdrawal_percentage": null,
+  "withdrawal_frequency": "biweekly",
   "inflation_rate": 0.03,
   "withdrawal_strategy_params": {},
 
@@ -39,8 +45,15 @@
   "save_plots": true,
   "show_plots_interactive": false,
   "close_plots_after_save": false,
-  "plots_directory": "../plots/test",
+  "plots_directory": "output/plots/test",
 
   "save_results": true,
-  "results_directory": "../results/test"
+  "results_directory": "output/results/test",
+
+  "_validation_settings": "Monte Carlo validation/testing parameters",
+  "num_mc_simulations": 100,
+  "use_simulated_data": true,
+  "mc_reindex_method": "ffill",
+  "simulated_mean_returns_file": "output/cache/simulated_mean_returns.csv",
+  "simulated_cov_matrices_file": "output/cache/simulated_cov_matrices.txt"
 }

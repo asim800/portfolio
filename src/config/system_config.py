@@ -53,8 +53,8 @@ class SystemConfig:
     mc_reindex_method: str = 'ffill'        # Time-varying parameter reindex method: 'ffill' or 'interpolate'
 
     # Simulated data parameter files (only used if use_simulated_data=True)
-    simulated_mean_returns_file: str = '../data/simulated_mean_returns.csv'  # CSV file with mean returns (acc/dec regimes)
-    simulated_cov_matrices_file: str = '../data/simulated_cov_matrices.txt'  # Text file with 3D covariance array (acc/dec regimes)
+    simulated_mean_returns_file: str = 'output/cache/simulated_mean_returns.csv'  # CSV file with mean returns (acc/dec regimes)
+    simulated_cov_matrices_file: str = 'output/cache/simulated_cov_matrices.txt'  # Text file with 3D covariance array (acc/dec regimes)
 
     # Contribution/Savings Strategy (for accumulation phase - optional)
     contribution_amount: Optional[float] = None         # Fixed contribution amount per period

@@ -16,20 +16,25 @@ Usage:
 """
 
 import sys
+import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import importlib
-from system_config import SystemConfig
-from fin_data import FinData
-import mc_path_generator, visualize_mc_lifecycle
-importlib.reload(mc_path_generator)
-importlib.reload(visualize_mc_lifecycle)
-from mc_path_generator import MCPathGenerator
-from visualize_mc_lifecycle import run_accumulation_mc, run_decumulation_mc
-from visualize_covariance_matrices import plot_covariance_evolution
-from portfolio import Portfolio
-import simulated_data_params as sim_params
+
+# Add project root to path for imports
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
+
+# Change to project root so relative paths work
+os.chdir(PROJECT_ROOT)
+
+from src.config import SystemConfig
+from src.data import FinData
+from src.montecarlo import MCPathGenerator
+from src.montecarlo.lifecycle import run_accumulation_mc, run_decumulation_mc
+from src.visualization.heatmaps import plot_covariance_evolution
+from src.engine import Portfolio
+from src.data import simulated as sim_params
 
 import ipdb
 np.set_printoptions(linewidth=100)
@@ -172,7 +177,7 @@ print("=" * 80)
 
 # Step 1: Load config and data
 print("\n[1/6] Loading configuration and data...")
-config = SystemConfig.from_json('../configs/test_simple_buyhold.json')
+config = SystemConfig.from_json(os.path.join(PROJECT_ROOT, 'configs/test_simple_buyhold.json'))
 tickers_df = pd.read_csv(config.ticker_file)
 tickers = tickers_df['Symbol'].tolist()
 weights_dict = dict(zip(tickers_df['Symbol'], tickers_df['Weight']))
