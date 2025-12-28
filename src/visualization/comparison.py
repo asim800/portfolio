@@ -13,8 +13,10 @@ import matplotlib.pyplot as plt
 from matplotlib.gridspec import GridSpec
 from scipy import stats
 
-from metrics import calculate_max_drawdown, calculate_sharpe, calculate_portfolio_metrics
 
+from src.strategies.registry import calculate_max_drawdown, calculate_sharpe, calculate_portfolio_metrics
+
+warnings.filterwarnings('error', category=RuntimeWarning, module='numpy.linalg')
 
 def create_strategy_visualization(strategies, returns_data, colors=None, title='Strategy Comparison',
                                  baselines=None, detailed_views=None, add_legend_panel=False):
@@ -162,13 +164,27 @@ def create_strategy_visualization(strategies, returns_data, colors=None, title='
     labels = []
     colors_list = []
 
+    def validate_for_kde(returns, name):
+        """Validate returns array for KDE, raise error if invalid."""
+        if len(returns) < 2:
+            raise ValueError(f"Strategy '{name}' has insufficient data points ({len(returns)}) for KDE")
+        if np.any(np.isnan(returns)):
+            raise ValueError(f"Strategy '{name}' has NaN values in returns")
+        if np.any(np.isinf(returns)):
+            raise ValueError(f"Strategy '{name}' has Inf values in returns")
+        if np.std(returns) < 1e-10:
+            raise ValueError(f"Strategy '{name}' has near-zero variance in returns (std={np.std(returns):.2e})")
+
     # Add baselines first
     if baselines:
         for name, strategy in baselines.items():
             if hasattr(strategy, 'wealth_history') and strategy.wealth_history and len(strategy.wealth_history) > 1:
                 wealth = np.array(strategy.wealth_history)
+                if np.any(np.isnan(wealth)):
+                    raise ValueError(f"Baseline '{name}' has NaN values in wealth_history")
                 # Calculate raw returns (not log returns)
                 returns = np.diff(wealth) / wealth[:-1] * 100  # Percentage returns
+                validate_for_kde(returns, name)
                 all_returns.append(returns)
                 labels.append(name)
                 colors_list.append(colors.get(name, 'gray'))
@@ -177,8 +193,11 @@ def create_strategy_visualization(strategies, returns_data, colors=None, title='
     for name, strategy in strategies.items():
         if hasattr(strategy, 'wealth_history') and strategy.wealth_history and len(strategy.wealth_history) > 1:
             wealth = np.array(strategy.wealth_history)
+            if np.any(np.isnan(wealth)):
+                raise ValueError(f"Strategy '{name}' has NaN values in wealth_history")
             # Calculate raw returns (not log returns)
             returns = np.diff(wealth) / wealth[:-1] * 100  # Percentage returns
+            validate_for_kde(returns, name)
             all_returns.append(returns)
             display_name = name.split('. ', 1)[1] if '. ' in name else name
             labels.append(display_name)
@@ -371,18 +390,9 @@ def _create_detailed_panel(ax, panel_info, strategies, colors):
 def create_ten_more_visualization(strategies, returns_data):
     """Create comprehensive visualization for 10 new approaches"""
 
-    colors = {
-        '6. Time-Varying Ergodicity': 'purple',
-        '7. Multi-Timeframe Hierarchical': 'red',
-        '8. Multi-Safe-Haven UP': 'green',
-        '9. Kelly-Criterion UP': 'blue',
-        '10. Asymmetric Loss-Averse': 'orange',
-        '11. Sequential Threshold': 'brown',
-        '12. Volatility-Scaled UP': 'pink',
-        '13. Momentum-Enhanced': 'darkgreen',
-        '14. Three-Level Hierarchical': 'gold',
-        '15. Dynamic Granularity': 'cyan',
-    }
+    # Import the full color palette from registry
+    from src.strategies.registry import get_default_colors
+    colors = get_default_colors()
 
     # Use legend panel instead of detailed views
     return create_strategy_visualization(
@@ -395,7 +405,7 @@ def create_ten_more_visualization(strategies, returns_data):
 
 def create_comparison_visualization(strategies, baseline_wealth, buy_hold, returns_data):
     """Create comprehensive comparison visualization"""
-    from metrics import get_default_colors
+    from src.strategies.registry import get_default_colors
 
     # Use full color palette for all portfolios
     colors = get_default_colors()
@@ -644,19 +654,20 @@ def visualize_subset(portfolio_numbers, **kwargs):
         # Without baselines
         fig, strategies = visualize_subset([1, 4, 7, 8], include_baselines=False)
     """
-    from metrics import compare_selected_portfolios, create_portfolio_registry
+    from src.strategies.registry import create_portfolio_registry, compare_portfolios
 
     registry = create_portfolio_registry()
 
-    # Build name list
-    portfolio_names = []
+    # Build name list and create strategy instances
+    strategies = {}
     for num in portfolio_numbers:
         # Find the portfolio with this number
         for name in registry:
             if name.startswith(f'{num}. '):
-                portfolio_names.append(name)
+                cls, params, _ = registry[name]
+                strategies[name] = cls(**params)
                 break
         else:
             raise ValueError(f"No portfolio found with number {num}")
 
-    return compare_selected_portfolios(portfolio_names, **kwargs)
+    return compare_portfolios(strategies=strategies, **kwargs)

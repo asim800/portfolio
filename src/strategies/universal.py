@@ -20,6 +20,37 @@ import numpy as np
 from scipy.stats import norm
 
 
+def validate_price_multipliers(price_multipliers: dict, required_assets: list, strategy_name: str) -> None:
+    """
+    Validate that price_multipliers contains valid data for required assets.
+
+    Args:
+        price_multipliers: Dict mapping asset names to price multipliers
+        required_assets: List of asset names this strategy requires
+        strategy_name: Name of the strategy (for error messages)
+
+    Raises:
+        KeyError: If a required asset is missing
+        ValueError: If a required asset has NaN or Inf value
+    """
+    for asset in required_assets:
+        if asset not in price_multipliers:
+            raise KeyError(
+                f"Strategy '{strategy_name}' requires asset '{asset}' but it's not in price_multipliers. "
+                f"Available assets: {list(price_multipliers.keys())}"
+            )
+        value = price_multipliers[asset]
+        if np.isnan(value):
+            raise ValueError(
+                f"Strategy '{strategy_name}' received NaN for asset '{asset}'. "
+                f"This row should be dropped before passing to the strategy."
+            )
+        if np.isinf(value):
+            raise ValueError(
+                f"Strategy '{strategy_name}' received Inf for asset '{asset}'."
+            )
+
+
 __all__ = [
     'ThreeAssetUniversalPortfolio',
     'ErgodicUniversalPortfolio',
@@ -57,6 +88,8 @@ class ThreeAssetUniversalPortfolio:
 
     # Asset order for portfolio matrix columns
     ASSET_ORDER = ['stocks', 'bonds', 'tail_hedge']
+    # Required assets for NaN filtering (same as ASSET_ORDER for this strategy)
+    REQUIRED_ASSETS = ['stocks', 'bonds', 'tail_hedge']
 
     def __init__(self, n_portfolios=21):
         """
@@ -140,6 +173,9 @@ class ErgodicUniversalPortfolio:
     - Should penalize risky paths even if they have high final wealth
     """
 
+    # Required assets for NaN filtering
+    REQUIRED_ASSETS = ['stocks', 'bonds']
+
     def __init__(self, n_portfolios=101, ergodicity_factor=0.5):
         """
         ergodicity_factor: how much to penalize volatility (0 to 1)
@@ -216,6 +252,9 @@ class ConditionalSafeHavenPortfolio:
     - Elevated risk: Increase bond/hedge allocation
     - Crisis: Go heavy into safe haven
     """
+
+    # Required assets for NaN filtering
+    REQUIRED_ASSETS = ['stocks', 'bonds']
 
     def __init__(self, n_portfolios=101, lookback=20):
         self.normal_portfolio = UniversalPortfolioBasic(n_portfolios)
@@ -301,6 +340,10 @@ class ConditionalSafeHavenPortfolio:
 
 class UniversalPortfolioBasic:
     """Basic Universal Portfolio for 2-asset allocation (bonds/stocks)"""
+
+    # Required assets for NaN filtering
+    REQUIRED_ASSETS = ['stocks', 'bonds']
+
     def __init__(self, n_portfolios=101):
         self.portfolios = np.linspace(0, 1, n_portfolios)
         self.log_weights = np.zeros(n_portfolios)
@@ -344,6 +387,9 @@ class BuyAndHold:
 
     This is what most individual investors actually do!
     """
+
+    # Required assets for NaN filtering
+    REQUIRED_ASSETS = ['stocks', 'bonds']
 
     def __init__(self, initial_stock_pct=0.6):
         """
@@ -400,6 +446,9 @@ class HierarchicalUniversalPortfolio:
     - Optimize growth assets separately
     - Then optimize insurance allocation
     """
+
+    # Required assets for NaN filtering
+    REQUIRED_ASSETS = ['stocks', 'bonds', 'tail_hedge']
 
     def __init__(self, n_portfolios_risky=51, n_portfolios_hedge=21):
         # Level 1: Allocation within risky assets (stocks vs bonds)
@@ -470,6 +519,9 @@ class DrawdownAwareUniversalPortfolio:
     - Also minimize maximum drawdown
     - Penalize portfolios that had severe drawdowns even if they recovered
     """
+
+    # Required assets for NaN filtering
+    REQUIRED_ASSETS = ['stocks', 'bonds']
 
     def __init__(self, n_portfolios=101, drawdown_penalty=1.0):
         self.portfolios = np.linspace(0, 1, n_portfolios)
@@ -544,6 +596,9 @@ class TimeVaryingErgodicityUP:
     High volatility → increase penalty (more conservative)
     Low volatility → decrease penalty (more aggressive)
     """
+
+    # Required assets for NaN filtering
+    REQUIRED_ASSETS = ['stocks', 'bonds']
 
     def __init__(self, n_portfolios=101, base_ergodicity=0.5, volatility_window=20):
         self.n_portfolios = n_portfolios
@@ -638,6 +693,9 @@ class MultiTimeframeHierarchical:
                Insurance decisions are more strategic
     """
 
+    # Required assets for NaN filtering
+    REQUIRED_ASSETS = ['stocks', 'bonds', 'tail_hedge']
+
     def __init__(self, n_portfolios_risky=51, n_portfolios_hedge=21, hedge_rebalance_freq=5):
         self.risky_portfolios = np.linspace(0, 1, n_portfolios_risky)
         self.risky_weights = np.ones(n_portfolios_risky)
@@ -716,6 +774,8 @@ class MultiSafeHavenUP:
 
     # Asset order for portfolio matrix columns
     ASSET_ORDER = ['stocks', 'bonds', 'tail_hedge', 'gold']
+    # Required assets for NaN filtering
+    REQUIRED_ASSETS = ['stocks', 'bonds', 'tail_hedge', 'gold']
 
     def __init__(self, n_portfolios=15):
         # Generate 4D simplex: (stock%, bond%, tail_hedge%, gold%)
@@ -800,6 +860,9 @@ class KellyUniversalPortfolio:
     Kelly fraction controls leverage/conservatism
     """
 
+    # Required assets for NaN filtering
+    REQUIRED_ASSETS = ['stocks', 'bonds']
+
     def __init__(self, n_portfolios=101, kelly_fraction=0.5):
         self.portfolios = np.linspace(0, 1, n_portfolios)
         self.kelly_fraction = kelly_fraction
@@ -855,6 +918,9 @@ class AsymmetricLossAverseUP:
 
     Mimics behavioral finance - losses hurt more than gains feel good
     """
+
+    # Required assets for NaN filtering
+    REQUIRED_ASSETS = ['stocks', 'bonds']
 
     def __init__(self, n_portfolios=101, loss_penalty=1.5):
         self.portfolios = np.linspace(0, 1, n_portfolios)
@@ -912,6 +978,9 @@ class SequentialThresholdUP:
 
     Rationale: Need capital base before paying for insurance
     """
+
+    # Required assets for NaN filtering
+    REQUIRED_ASSETS = ['stocks', 'bonds', 'tail_hedge']
 
     def __init__(self, n_portfolios=101, wealth_threshold=2.0, hedge_pct=0.15):
         self.portfolios = np.linspace(0, 1, n_portfolios)
@@ -980,6 +1049,9 @@ class VolatilityScaledUP:
     High volatility → reduce allocation
     Low volatility → increase allocation
     """
+
+    # Required assets for NaN filtering
+    REQUIRED_ASSETS = ['stocks', 'bonds']
 
     def __init__(self, n_portfolios=101, target_vol=0.12, vol_window=20):
         self.portfolios = np.linspace(0, 1, n_portfolios)
@@ -1056,6 +1128,9 @@ class MomentumEnhancedHierarchical:
     If stock momentum positive: increase equity allocation
     If stock momentum negative: increase hedge allocation
     """
+
+    # Required assets for NaN filtering
+    REQUIRED_ASSETS = ['stocks', 'bonds', 'tail_hedge']
 
     def __init__(self, n_portfolios_risky=51, n_portfolios_hedge=21, momentum_window=10):
         self.risky_portfolios = np.linspace(0, 1, n_portfolios_risky)
@@ -1154,6 +1229,9 @@ class ThreeLevelHierarchical:
     Most granular separation of concerns
     """
 
+    # Required assets for NaN filtering
+    REQUIRED_ASSETS = ['stocks', 'bonds', 'commodities', 'gold', 'tail_hedge']
+
     def __init__(self, n_level1=21, n_level2=11, n_level3=11):
         # Level 1: 2D simplex (stocks, bonds, commodities sum to 1)
         self.level1_portfolios = self._generate_2d_simplex(n_level1)
@@ -1248,6 +1326,9 @@ class DynamicGranularityUP:
     Use fine granularity in volatile markets (need precision)
     Use coarse granularity in calm markets (save computation)
     """
+
+    # Required assets for NaN filtering
+    REQUIRED_ASSETS = ['stocks', 'bonds']
 
     def __init__(self, min_portfolios=21, max_portfolios=101, vol_threshold=0.15):
         self.min_portfolios = min_portfolios

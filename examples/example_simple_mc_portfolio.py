@@ -17,14 +17,14 @@ import numpy as np
 import pandas as pd
 import logging
 
-# Add src3 to path
-sys.path.insert(0, os.path.dirname(__file__))
+# Add project root to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mc_path_generator import MCPathGenerator
-from portfolio import Portfolio
-from allocation_strategies import StaticAllocation, EqualWeight, OptimizedAllocation
-from rebalancing_triggers import Never, Periodic, Threshold
-from portfolio_optimizer import PortfolioOptimizer
+from src.montecarlo.path_generator import MCPathGenerator
+from src.engine.portfolio import Portfolio
+from src.strategies.allocation import StaticAllocation, EqualWeight, OptimizedAllocation
+from src.strategies.rebalancing import Never, Periodic, Threshold
+from src.engine.optimizer import PortfolioOptimizer
 
 # Configure logging
 logging.basicConfig(

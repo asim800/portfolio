@@ -3,12 +3,36 @@
 Visualize time-varying covariance matrices for retirement scenarios.
 """
 
+import warnings
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from matplotlib.colors import LinearSegmentedColormap
 from src.config import SystemConfig
 from src.data import FinData
+
+
+def safe_det(matrix):
+    """Safely compute determinant, returning 0 for singular/problematic matrices."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", RuntimeWarning)
+        try:
+            det = np.linalg.det(matrix)
+            if np.isnan(det) or np.isinf(det):
+                return 0.0
+            return det
+        except np.linalg.LinAlgError:
+            return 0.0
+
+
+def safe_det_ratio(det1, det2):
+    """Safely compute percentage change between two determinants."""
+    if det1 == 0 or det2 == 0:
+        return "N/A"
+    ratio = (det2 / det1 - 1) * 100
+    if np.isnan(ratio) or np.isinf(ratio):
+        return "N/A"
+    return f'{ratio:+.1f}%'
 
 
 def plot_heatmap(ax, matrix, labels, title, cmap='YlOrRd', vmin=None, vmax=None, fmt='.4f', cbar_label='Value'):
@@ -188,12 +212,16 @@ def plot_covariance_evolution(cov_matrix_acc, cov_matrix_dec, tickers=None,
     ax9 = fig.add_subplot(gs[2, 2])
     ax9.axis('off')
 
+    # Compute determinants safely
+    det_acc = safe_det(cov_acc_array)
+    det_dec = safe_det(cov_dec_array)
+
     stats_data = [
         ['Metric', acc_label, dec_label, 'Change'],
         ['', '', '', ''],
-        ['Determinant', f'{np.linalg.det(cov_acc_array):.2e}',
-         f'{np.linalg.det(cov_dec_array):.2e}',
-         f'{(np.linalg.det(cov_dec_array)/np.linalg.det(cov_acc_array) - 1)*100:+.1f}%'],
+        ['Determinant', f'{det_acc:.2e}',
+         f'{det_dec:.2e}',
+         safe_det_ratio(det_acc, det_dec)],
         ['Trace', f'{np.trace(cov_acc_array):.4f}',
          f'{np.trace(cov_dec_array):.4f}',
          f'{(np.trace(cov_dec_array)/np.trace(cov_acc_array) - 1)*100:+.1f}%'],

@@ -7,6 +7,7 @@ Extracted from ufsrc/src/metrics.py.
 """
 
 from typing import Dict, Tuple, Type, Any
+import ipdb
 
 from .universal import (
     ThreeAssetUniversalPortfolio,
@@ -394,6 +395,55 @@ def determine_required_assets(strategy_name):
     return multi_asset_map.get(base_name, 2)
 
 
+def _get_strategy_required_assets(strategy):
+    """
+    Get the required assets for a strategy from its class attribute.
+
+    Falls back to ['stocks', 'bonds'] if not defined.
+    """
+    if hasattr(strategy.__class__, 'REQUIRED_ASSETS'):
+        return strategy.__class__.REQUIRED_ASSETS
+    return ['stocks', 'bonds']
+
+
+def _filter_data_for_strategy(price_multipliers_df, required_assets, strategy_name):
+    """
+    Filter DataFrame to drop rows with NaN in required asset columns.
+
+    Returns filtered DataFrame and prints diagnostic if rows were dropped.
+    """
+    import numpy as np
+
+    original_len = len(price_multipliers_df)
+
+    # Check which required assets exist in the data
+    available_assets = [a for a in required_assets if a in price_multipliers_df.columns]
+    missing_assets = [a for a in required_assets if a not in price_multipliers_df.columns]
+
+    if missing_assets:
+        raise KeyError(
+            f"Strategy '{strategy_name}' requires assets {missing_assets} "
+            f"but they are not in the data. Available: {list(price_multipliers_df.columns)}"
+        )
+
+    # Drop rows where any required asset has NaN
+    mask = price_multipliers_df[available_assets].notna().all(axis=1)
+    filtered_df = price_multipliers_df[mask].copy()
+
+    dropped_count = original_len - len(filtered_df)
+    if dropped_count > 0:
+        # Find which assets had NaN values
+        nan_counts = {}
+        for asset in available_assets:
+            nan_count = price_multipliers_df[asset].isna().sum()
+            if nan_count > 0:
+                nan_counts[asset] = nan_count
+
+        print(f"  [{strategy_name}] Dropped {dropped_count}/{original_len} rows with NaN in: {nan_counts}")
+
+    return filtered_df
+
+
 def compare_portfolios(
     strategies,
     returns_data=None,
@@ -406,6 +456,10 @@ def compare_portfolios(
 ):
     """
     Unified portfolio comparison function.
+
+    Each strategy is simulated with data filtered to remove NaN values only in
+    columns that the strategy actually uses. This allows strategies with fewer
+    asset requirements to use more of the available data.
 
     Args:
         strategies: Dict mapping name -> strategy instance
@@ -433,12 +487,13 @@ def compare_portfolios(
             returns_array = simulate_extended_returns(n_periods, seed)
             asset_names = ['bonds', 'stocks', 'tail_hedge', 'commodities', 'gold']
         returns_data = pd.DataFrame(returns_array, columns=asset_names)
-        price_multipliers = returns_data
+        price_multipliers_full = returns_data
     else:
         if not isinstance(returns_data, pd.DataFrame):
             raise ValueError("returns_data must be a pandas DataFrame")
+
         asset_names = list(returns_data.columns)
-        price_multipliers = returns_data + 1.0
+        price_multipliers_full = returns_data + 1.0
 
     # Create baselines if requested
     baselines = {}
@@ -450,23 +505,42 @@ def compare_portfolios(
             'Standard UP (2-asset)': standard_up
         }
 
-    # Run simulation
-    n_sim_periods = len(price_multipliers)
-    for t in range(n_sim_periods):
-        price_mult_dict = {asset_names[i]: price_multipliers.iloc[t, i]
-                          for i in range(len(asset_names))}
-
-        # Update baselines
-        for name, strategy in baselines.items():
-            if hasattr(strategy, 'update') and callable(strategy.update):
-                strategy.update(price_mult_dict)
-
-        # Update main strategies
-        for name, strategy in strategies.items():
-            strategy.update(price_mult_dict)
-
-    # Combine all strategies
+    # Combine all strategies for unified processing
     all_strategies = {**baselines, **strategies}
+
+    # Check for NaN in data and print summary
+    nan_summary = price_multipliers_full.isna().sum()
+    if nan_summary.any():
+        print("\nNaN values detected in input data:")
+        for col, count in nan_summary.items():
+            if count > 0:
+                print(f"  {col}: {count} NaN values")
+        print("\nFiltering data per-strategy based on required assets...")
+
+    # Run simulation for each strategy with its own filtered data
+    for name, strategy in all_strategies.items():
+        required_assets = _get_strategy_required_assets(strategy)
+
+        # Filter data for this strategy (drops rows with NaN in required columns only)
+        try:
+            filtered_price_multipliers = _filter_data_for_strategy(
+                price_multipliers_full, required_assets, name
+            )
+        except KeyError as e:
+            print(f"  [{name}] Skipped: {e}")
+            continue
+
+        # Run simulation for this strategy
+        for t in range(len(filtered_price_multipliers)):
+            price_mult_dict = filtered_price_multipliers.iloc[t].to_dict()
+
+            try:
+                strategy.update(price_mult_dict)
+            except KeyError as e:
+                raise KeyError(
+                    f"Strategy '{name}' requires asset {e} but available assets are: {list(price_mult_dict.keys())}. "
+                    f"Strategy may require more assets than provided in the data."
+                ) from e
 
     # Collect metrics
     results = []
