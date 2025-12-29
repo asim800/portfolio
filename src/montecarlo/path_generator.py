@@ -74,6 +74,10 @@ class MCPathGenerator:
                       frequency: str = 'D',
                       mean_returns: Optional[Union[np.ndarray, pd.DataFrame]] = None,
                       cov_matrices: Optional[Union[np.ndarray, pd.DataFrame]] = None,
+                      # Bootstrap parameters
+                      historical_returns: Optional[pd.DataFrame] = None,
+                      sampling_method: str = 'parametric',
+                      block_size: int = 20,
                       # Lifecycle parameters
                       accumulation_years: Optional[int] = None,
                       decumulation_years: Optional[int] = None,
@@ -82,23 +86,24 @@ class MCPathGenerator:
         """
         ONE method to generate ALL Monte Carlo paths.
 
-        ALL multivariate Gaussian sampling happens here in ONE place.
+        Supports both parametric (multivariate Gaussian) and bootstrap sampling.
 
-        Basic usage (constant parameters):
+        Basic usage (parametric, constant parameters):
             paths = gen.generate_paths(num_simulations=1000, total_periods=260, periods_per_year=26)
 
-        Time-varying parameters:
+        Bootstrap sampling (IID):
             paths = gen.generate_paths(num_simulations=1000, total_periods=260,
-                                      periods_per_year=26, mean_returns=df)
+                                      periods_per_year=26, historical_returns=df,
+                                      sampling_method='bootstrap')
 
         Lifecycle simulation:
             acc, dec = gen.generate_paths(num_simulations=1000, accumulation_years=9,
                                          decumulation_years=30, periods_per_year=26)
 
-        Time-varying with interpolation:
+        Lifecycle with bootstrap:
             acc, dec = gen.generate_paths(num_simulations=1000, accumulation_years=9,
                                          decumulation_years=30, periods_per_year=26,
-                                         mean_returns=mean_df, reindex_method='interpolate')
+                                         historical_returns=df, sampling_method='bootstrap_block')
 
         Parameters:
         -----------
@@ -112,14 +117,32 @@ class MCPathGenerator:
             Frequency (e.g., 26 for biweekly, 12 for monthly, 252 for daily)
 
         mean_returns : np.ndarray or pd.DataFrame, optional
+            For parametric sampling only.
             - None: Use default self.mean_returns
             - np.ndarray: Constant mean returns
             - pd.DataFrame: Time-varying mean returns (requires start_date)
 
         cov_matrices : np.ndarray or pd.DataFrame, optional
+            For parametric sampling only.
             - None: Use default self.cov_matrix
             - np.ndarray: Constant covariance
             - pd.DataFrame: Time-varying covariance (requires start_date)
+
+        historical_returns : pd.DataFrame, optional
+            Historical returns data for bootstrap sampling. Required when
+            sampling_method is not 'parametric'. Columns must include self.tickers.
+
+        sampling_method : str, optional
+            Method for generating returns. Default is 'parametric'.
+            - 'parametric': Multivariate Gaussian (uses mean_returns, cov_matrices)
+            - 'bootstrap': IID bootstrap with replacement
+            - 'bootstrap_block': Block bootstrap preserving autocorrelation
+            - 'bootstrap_stationary': Stationary bootstrap with random block lengths
+
+        block_size : int, optional
+            Block size for block/stationary bootstrap. Default is 20.
+            - 'bootstrap_block': fixed block size
+            - 'bootstrap_stationary': expected (mean) block length
 
         accumulation_years : int, optional
             If provided, enables lifecycle mode (returns tuple)
@@ -162,46 +185,69 @@ class MCPathGenerator:
         self.total_periods = total_periods
         self.periods_per_year = periods_per_year
 
-        # Parse parameters (helper functions just prepare data)
-        mean_array, cov_array = self._parse_parameters(
-            total_periods, periods_per_year, start_date, frequency,
-            mean_returns, cov_matrices, reindex_method
-        )
+        # Validate sampling method
+        valid_methods = ['parametric', 'bootstrap', 'bootstrap_block', 'bootstrap_stationary']
+        if sampling_method not in valid_methods:
+            raise ValueError(f"sampling_method must be one of {valid_methods}, got '{sampling_method}'")
 
+        # Bootstrap requires historical_returns DataFrame
+        if sampling_method != 'parametric':
+            if historical_returns is None:
+                raise ValueError(f"historical_returns DataFrame required for sampling_method='{sampling_method}'")
+            if not isinstance(historical_returns, pd.DataFrame):
+                raise ValueError("historical_returns must be a pandas DataFrame")
+            # Validate tickers exist in historical_returns
+            missing = set(self.tickers) - set(historical_returns.columns)
+            if missing:
+                raise ValueError(f"historical_returns missing columns: {missing}")
 
         # ====================================================================
-        # SINGLE POINT: ALL MULTIVARIATE GAUSSIAN SAMPLING HAPPENS HERE
+        # SAMPLING: Method-based dispatch
         # ====================================================================
-
         paths = np.zeros((num_simulations, total_periods, self.num_assets))
 
-        for nmc in range(num_simulations):
-          rj = self.lamda * (np.exp(self.mu + 0.5 * self.delta **2) - 1)
-          # Time-varying: Sample period-by-period with varying parameters
-          for period in range(total_periods):
-              period_mean = mean_array[period]
-              period_cov = cov_array[period]
+        if sampling_method == 'parametric':
+            # Parse parameters (only needed for parametric)
+            mean_array, cov_array = self._parse_parameters(
+                total_periods, periods_per_year, start_date, frequency,
+                mean_returns, cov_matrices, reindex_method
+            )
 
-              # SAMPLE: Multivariate Gaussian for this period
-              paths[nmc, period, :] = np.random.multivariate_normal(
-                  mean=period_mean,
-                  cov=period_cov
-              )
+            # PARAMETRIC: Multivariate Gaussian sampling
+            for nmc in range(num_simulations):
+                rj = self.lamda * (np.exp(self.mu + 0.5 * self.delta **2) - 1)
+                for period in range(total_periods):
+                    period_mean = mean_array[period]
+                    period_cov = cov_array[period]
 
-              self.cholesky = np.linalg.cholesky(period_cov)
-              paths[nmc, period, :] = np.random.standard_normal(
-                  size=(self.num_assets,)
-              )
+                    self.cholesky = np.linalg.cholesky(period_cov)
+                    paths[nmc, period, :] = np.random.standard_normal(
+                        size=(self.num_assets,)
+                    )
+                    paths[nmc, period, :] = period_mean + np.dot(self.cholesky, paths[nmc, period, :])
+        else:
+            # BOOTSTRAP: Sample from historical returns
+            from src.montecarlo.bootstrap import (
+                bootstrap_returns, block_bootstrap, stationary_bootstrap
+            )
 
-              paths[nmc, period, :] = np.dot(self.cholesky, paths[nmc, period, :])
+            for nmc in range(num_simulations):
+                # Each simulation gets unique seed for different bootstrap sample
+                sim_seed = self.seed + nmc if self.seed else None
+
+                if sampling_method == 'bootstrap':
+                    sampled = bootstrap_returns(historical_returns, total_periods, sim_seed)
+                elif sampling_method == 'bootstrap_block':
+                    sampled = block_bootstrap(historical_returns, total_periods, block_size, sim_seed)
+                elif sampling_method == 'bootstrap_stationary':
+                    sampled = stationary_bootstrap(historical_returns, total_periods, block_size, sim_seed)
+
+                # Extract columns in ticker order
+                paths[nmc, :, :] = sampled[self.tickers].values
 
         # ====================================================================
         # END OF SAMPLING - Everything after is just reshaping/splitting
         # ====================================================================
-        # zz = paths.sum(1)
-        # plt.hist(zz[:,1], 20)
-        # plt.plot(zz[:,1])
-        # plt.plot(paths[0])
         # Store paths
         self.paths = paths
 
