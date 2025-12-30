@@ -383,6 +383,25 @@ def run_mc_simulation(
 # Parameter Sweep
 # ============================================================================
 
+def _is_date_param(param_name: str) -> bool:
+    """Check if parameter is a date type."""
+    return 'date' in param_name.lower()
+
+
+def _format_param_value(value, param_name: str) -> str:
+    """Format parameter value for display."""
+    if _is_date_param(param_name):
+        return str(value)[:10]  # YYYY-MM-DD
+    elif isinstance(value, (int, float)) and abs(value) >= 1e6:
+        return f"${value/1e6:.1f}M"
+    elif isinstance(value, (int, float)) and abs(value) >= 1000:
+        return f"${value/1e3:.0f}K"
+    elif isinstance(value, (int, float)):
+        return f"{value:,.0f}"
+    else:
+        return str(value)
+
+
 def run_parameter_sweep(
     config_path: str,
     param_name: str,
@@ -399,9 +418,9 @@ def run_parameter_sweep(
     config_path : str
         Path to base JSON config file
     param_name : str
-        Parameter to sweep (e.g., 'initial_portfolio_value')
+        Parameter to sweep (e.g., 'initial_portfolio_value', 'retirement_date')
     param_values : list
-        List of values to test
+        List of values to test (numbers or date strings like '2030-01-01')
     num_simulations : int, optional
         Number of MC simulations per run
     seed : int
@@ -414,6 +433,7 @@ def run_parameter_sweep(
     pd.DataFrame with columns for parameter value and percentiles
     """
     results = []
+    is_date = _is_date_param(param_name)
 
     # Load historical data once (use first config for data loading)
     base_config = SystemConfig.from_json(config_path)
@@ -424,7 +444,7 @@ def run_parameter_sweep(
     for i, value in enumerate(param_values):
         if verbose:
             print(f"\n{'='*60}")
-            print(f"[{i+1}/{len(param_values)}] Running {param_name} = {value:,.0f}")
+            print(f"[{i+1}/{len(param_values)}] Running {param_name} = {_format_param_value(value, param_name)}")
             print(f"{'='*60}")
 
         # Load fresh config and modify parameter
@@ -479,7 +499,6 @@ def run_parameter_sweep(
 def create_single_run_visualization(
     result: dict,
     config: SystemConfig,
-    data_source: str,
     output_path: str = None
 ) -> plt.Figure:
     """
@@ -491,8 +510,6 @@ def create_single_run_visualization(
         Results from run_mc_simulation()
     config : SystemConfig
         Configuration object
-    data_source : str
-        Data source description
     output_path : str, optional
         Path to save the figure
 
@@ -516,26 +533,46 @@ def create_single_run_visualization(
     param_color = '#2E86AB'  # Blue for parametric
     boot_color = '#A23B72'   # Magenta for bootstrap
 
-    # Panel 1: Accumulation - Parametric
+    # Panel 1: Accumulation Paths - Parametric + Bootstrap overlaid
     ax = axes[0, 0]
     for i in range(num_paths):
         ax.plot(acc_values_param[i, :], alpha=0.3, linewidth=0.8, color=param_color)
-    ax.set_title('Accumulation (Parametric)', fontsize=12, fontweight='bold')
+    if acc_values_boot is not None:
+        for i in range(num_paths):
+            ax.plot(acc_values_boot[i, :], alpha=0.3, linewidth=0.8, color=boot_color)
+        ax.set_title('Accumulation (Parametric + Bootstrap)', fontsize=12, fontweight='bold')
+        # Add legend
+        from matplotlib.lines import Line2D
+        legend_elements = [
+            Line2D([0], [0], color=param_color, lw=2, alpha=0.7, label='Parametric'),
+            Line2D([0], [0], color=boot_color, lw=2, alpha=0.7, label='Bootstrap'),
+        ]
+        ax.legend(handles=legend_elements, fontsize=8, loc='upper left')
+    else:
+        ax.set_title('Accumulation (Parametric only)', fontsize=12, fontweight='bold')
     ax.set_xlabel('Period', fontsize=10)
     ax.set_ylabel('Portfolio Value ($)', fontsize=10)
     ax.grid(True, alpha=0.3)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(
         lambda x, p: f'${x/1e6:.1f}M' if x >= 1e6 else f'${x/1e3:.0f}K'))
 
-    # Panel 2: Accumulation - Bootstrap
+    # Panel 2: Decumulation Paths - Parametric + Bootstrap overlaid
     ax = axes[0, 1]
-    if acc_values_boot is not None:
+    for i in range(num_paths):
+        ax.plot(dec_values_param[i, :], alpha=0.3, linewidth=0.8, color=param_color)
+    if dec_values_boot is not None:
         for i in range(num_paths):
-            ax.plot(acc_values_boot[i, :], alpha=0.3, linewidth=0.8, color=boot_color)
-        ax.set_title(f'Accumulation (Bootstrap - {data_source})', fontsize=12, fontweight='bold')
+            ax.plot(dec_values_boot[i, :], alpha=0.3, linewidth=0.8, color=boot_color)
+        ax.set_title('Decumulation (Parametric + Bootstrap)', fontsize=12, fontweight='bold')
+        # Add legend
+        from matplotlib.lines import Line2D
+        legend_elements = [
+            Line2D([0], [0], color=param_color, lw=2, alpha=0.7, label='Parametric'),
+            Line2D([0], [0], color=boot_color, lw=2, alpha=0.7, label='Bootstrap'),
+        ]
+        ax.legend(handles=legend_elements, fontsize=8, loc='upper right')
     else:
-        ax.text(0.5, 0.5, 'No Bootstrap Data', ha='center', va='center', fontsize=14, transform=ax.transAxes)
-        ax.set_title('Accumulation (Bootstrap - N/A)', fontsize=12, fontweight='bold')
+        ax.set_title('Decumulation (Parametric only)', fontsize=12, fontweight='bold')
     ax.set_xlabel('Period', fontsize=10)
     ax.set_ylabel('Portfolio Value ($)', fontsize=10)
     ax.grid(True, alpha=0.3)
@@ -760,13 +797,16 @@ def create_single_run_visualization(
     return fig
 
 
-def create_sweep_visualization(
+def _create_sweep_figure(
     df: pd.DataFrame,
     param_name: str,
-    output_path: str = None
+    method: str,
+    color: str,
+    output_path: str = None,
+    config_info: dict = None
 ) -> plt.Figure:
     """
-    Create visualization of parameter sweep results.
+    Create visualization for a single sampling method (parametric or bootstrap).
 
     Parameters:
     -----------
@@ -774,124 +814,131 @@ def create_sweep_visualization(
         Results from run_parameter_sweep()
     param_name : str
         Name of the swept parameter
+    method : str
+        'param' or 'boot'
+    color : str
+        Color for the plots
     output_path : str, optional
         Path to save the figure
+    config_info : dict, optional
+        Configuration parameters to display on the figure
 
     Returns:
     --------
     plt.Figure
     """
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    import matplotlib.dates as mdates
 
-    x = df[param_name].values
+    method_label = 'Parametric' if method == 'param' else 'Bootstrap'
+    fig, axes = plt.subplots(2, 2, figsize=(14, 12))  # Taller for config text
 
-    # Format x-axis label based on parameter
-    if 'value' in param_name.lower() or 'amount' in param_name.lower():
-        x_label = param_name.replace('_', ' ').title()
-        x_formatter = lambda v, p: f'${v/1e6:.1f}M' if v >= 1e6 else f'${v/1e3:.0f}K'
+    is_date = _is_date_param(param_name)
+    x_label = param_name.replace('_', ' ').title()
+
+    # Handle date vs numeric x-axis
+    if is_date:
+        # Convert date strings to datetime for plotting
+        x = pd.to_datetime(df[param_name])
+        x_numeric = mdates.date2num(x)
+        use_dates = True
     else:
-        x_label = param_name.replace('_', ' ').title()
-        x_formatter = lambda v, p: f'{v:,.0f}'
+        x = df[param_name].values
+        x_numeric = x
+        use_dates = False
 
-    # Colors
-    param_color = '#2E86AB'  # Blue for parametric
-    boot_color = '#A23B72'   # Magenta for bootstrap
+    # Format x-axis based on parameter type
+    if is_date:
+        x_formatter = mdates.DateFormatter('%Y')
+    elif 'value' in param_name.lower() or 'amount' in param_name.lower():
+        x_formatter = plt.FuncFormatter(lambda v, p: f'${v/1e6:.1f}M' if v >= 1e6 else f'${v/1e3:.0f}K')
+    else:
+        x_formatter = plt.FuncFormatter(lambda v, p: f'{v:,.0f}')
 
     # Panel 1: Accumulation percentiles (fan chart)
     ax = axes[0, 0]
+    ax.fill_between(x, df[f'acc_p5_{method}'], df[f'acc_p95_{method}'],
+                    alpha=0.2, color=color, label='5-95%')
+    ax.fill_between(x, df[f'acc_p25_{method}'], df[f'acc_p75_{method}'],
+                    alpha=0.3, color=color, label='25-75%')
+    ax.plot(x, df[f'acc_p50_{method}'], '-', color=color, linewidth=2,
+            label='Median')
 
-    # Parametric fan
-    ax.fill_between(x, df['acc_p5_param'], df['acc_p95_param'],
-                    alpha=0.2, color=param_color, label='Parametric 5-95%')
-    ax.fill_between(x, df['acc_p25_param'], df['acc_p75_param'],
-                    alpha=0.3, color=param_color)
-    ax.plot(x, df['acc_p50_param'], '-', color=param_color, linewidth=2,
-            label='Parametric Median')
-
-    # Bootstrap fan
-    ax.fill_between(x, df['acc_p5_boot'], df['acc_p95_boot'],
-                    alpha=0.2, color=boot_color, label='Bootstrap 5-95%')
-    ax.fill_between(x, df['acc_p25_boot'], df['acc_p75_boot'],
-                    alpha=0.3, color=boot_color)
-    ax.plot(x, df['acc_p50_boot'], '--', color=boot_color, linewidth=2,
-            label='Bootstrap Median')
-
-    ax.set_title('Final Accumulation Value by Parameter', fontsize=12, fontweight='bold')
+    ax.set_title(f'Final Accumulation Value ({method_label})', fontsize=12, fontweight='bold')
     ax.set_xlabel(x_label, fontsize=10)
     ax.set_ylabel('Portfolio Value at Retirement ($)', fontsize=10)
     ax.legend(fontsize=8, loc='upper left')
     ax.grid(True, alpha=0.3)
-    ax.xaxis.set_major_formatter(plt.FuncFormatter(x_formatter))
+    if use_dates:
+        ax.xaxis.set_major_formatter(x_formatter)
+        ax.xaxis.set_major_locator(mdates.YearLocator(2))
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+    else:
+        ax.xaxis.set_major_formatter(x_formatter)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(
         lambda v, p: f'${v/1e6:.1f}M' if v >= 1e6 else f'${v/1e3:.0f}K'))
 
     # Panel 2: Decumulation percentiles (fan chart)
     ax = axes[0, 1]
+    ax.fill_between(x, df[f'dec_p5_{method}'], df[f'dec_p95_{method}'],
+                    alpha=0.2, color=color, label='5-95%')
+    ax.fill_between(x, df[f'dec_p25_{method}'], df[f'dec_p75_{method}'],
+                    alpha=0.3, color=color, label='25-75%')
+    ax.plot(x, df[f'dec_p50_{method}'], '-', color=color, linewidth=2,
+            label='Median')
 
-    # Parametric fan
-    ax.fill_between(x, df['dec_p5_param'], df['dec_p95_param'],
-                    alpha=0.2, color=param_color)
-    ax.fill_between(x, df['dec_p25_param'], df['dec_p75_param'],
-                    alpha=0.3, color=param_color)
-    ax.plot(x, df['dec_p50_param'], '-', color=param_color, linewidth=2,
-            label='Parametric Median')
-
-    # Bootstrap fan
-    ax.fill_between(x, df['dec_p5_boot'], df['dec_p95_boot'],
-                    alpha=0.2, color=boot_color)
-    ax.fill_between(x, df['dec_p25_boot'], df['dec_p75_boot'],
-                    alpha=0.3, color=boot_color)
-    ax.plot(x, df['dec_p50_boot'], '--', color=boot_color, linewidth=2,
-            label='Bootstrap Median')
-
-    ax.set_title('Final Decumulation Value by Parameter', fontsize=12, fontweight='bold')
+    ax.set_title(f'Final Decumulation Value ({method_label})', fontsize=12, fontweight='bold')
     ax.set_xlabel(x_label, fontsize=10)
     ax.set_ylabel('Final Portfolio Value ($)', fontsize=10)
     ax.legend(fontsize=8, loc='upper left')
     ax.grid(True, alpha=0.3)
-    ax.xaxis.set_major_formatter(plt.FuncFormatter(x_formatter))
+    if use_dates:
+        ax.xaxis.set_major_formatter(x_formatter)
+        ax.xaxis.set_major_locator(mdates.YearLocator(2))
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+    else:
+        ax.xaxis.set_major_formatter(x_formatter)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(
         lambda v, p: f'${v/1e6:.1f}M' if v >= 1e6 else f'${v/1e3:.0f}K'))
 
-    # Panel 3: Success rates comparison
+    # Panel 3: Success rates
     ax = axes[1, 0]
+    if use_dates:
+        # For dates, calculate bar width in days (about 200 days = ~0.6 year)
+        width = 200 if len(x) > 1 else 100
+    else:
+        width = (x[1] - x[0]) * 0.6 if len(x) > 1 else x[0] * 0.2
+    ax.bar(x, df[f'dec_success_{method}'] * 100, width,
+           color=color, alpha=0.8)
 
-    width = (x[1] - x[0]) * 0.35 if len(x) > 1 else x[0] * 0.1
-    ax.bar(x - width/2, df['dec_success_param'] * 100, width,
-           label='Parametric', color=param_color, alpha=0.8)
-    ax.bar(x + width/2, df['dec_success_boot'] * 100, width,
-           label='Bootstrap', color=boot_color, alpha=0.8)
-
-    ax.set_title('Decumulation Success Rate by Parameter', fontsize=12, fontweight='bold')
+    ax.set_title(f'Decumulation Success Rate ({method_label})', fontsize=12, fontweight='bold')
     ax.set_xlabel(x_label, fontsize=10)
     ax.set_ylabel('Success Rate (%)', fontsize=10)
-    ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3, axis='y')
-    ax.xaxis.set_major_formatter(plt.FuncFormatter(x_formatter))
+    if use_dates:
+        ax.xaxis.set_major_formatter(x_formatter)
+        ax.xaxis.set_major_locator(mdates.YearLocator(2))
+        plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+    else:
+        ax.xaxis.set_major_formatter(x_formatter)
     ax.set_ylim(0, 105)
 
     # Panel 4: Summary table
     ax = axes[1, 1]
     ax.axis('off')
 
-    # Create summary table
     table_data = []
     for _, row in df.iterrows():
         param_val = row[param_name]
-        if param_val >= 1e6:
-            param_str = f'${param_val/1e6:.1f}M'
-        else:
-            param_str = f'${param_val/1e3:.0f}K'
+        param_str = _format_param_value(param_val, param_name)
 
         table_data.append([
             param_str,
-            f"${row['acc_p50_param']/1e6:.2f}M",
-            f"${row['acc_p50_boot']/1e6:.2f}M",
-            f"{row['dec_success_param']:.1%}",
-            f"{row['dec_success_boot']:.1%}",
+            f"${row[f'acc_p50_{method}']/1e6:.2f}M",
+            f"${row[f'dec_p50_{method}']/1e6:.2f}M",
+            f"{row[f'dec_success_{method}']:.1%}",
         ])
 
-    columns = [x_label, 'Acc Med (P)', 'Acc Med (B)', 'Success (P)', 'Success (B)']
+    columns = [x_label, 'Acc Median', 'Dec Median', 'Success']
 
     table = ax.table(
         cellText=table_data,
@@ -900,25 +947,104 @@ def create_sweep_visualization(
         cellLoc='center',
     )
     table.auto_set_font_size(False)
-    table.set_fontsize(9)
+    table.set_fontsize(10)
     table.scale(1.2, 1.5)
 
     # Style header
     for i in range(len(columns)):
-        table[(0, i)].set_facecolor('#4472C4')
+        table[(0, i)].set_facecolor(color)
         table[(0, i)].set_text_props(color='white', fontweight='bold')
 
-    ax.set_title('Summary Results', fontsize=12, fontweight='bold', pad=20)
+    ax.set_title(f'Summary ({method_label})', fontsize=12, fontweight='bold', pad=20)
 
-    plt.suptitle(f'Parameter Sweep: {param_name.replace("_", " ").title()}',
-                 fontsize=14, fontweight='bold', y=1.02)
-    plt.tight_layout()
+    # Add config info text box at the bottom (usetex=False to avoid LaTeX parsing of $)
+    if config_info:
+        config_text = (
+            f"Sweep: {config_info.get('sweep_param', param_name)}  |  "
+            f"Tickers: {config_info.get('ticker_file', 'N/A')}  |  "
+            f"Mean: {config_info.get('mean_returns_file', 'N/A')}  |  "
+            f"Cov: {config_info.get('cov_matrices_file', 'N/A')}\n"
+            f"Initial: ${config_info.get('initial_value', 0):,.0f}  |  "
+            f"Retirement: {config_info.get('retirement_date', 'N/A')}  |  "
+            f"Dec End: {config_info.get('dec_end_date', 'N/A')}  |  "
+            f"Freq: {config_info.get('simulation_frequency', 'N/A')}  |  "
+            f"Contribution: ${config_info.get('contribution_amount', 0):,.0f} ({config_info.get('contribution_frequency', 'N/A')})\n"
+            f"Match: {config_info.get('employer_match_rate', 0):.0%}  |  "
+            f"Withdrawal: ${config_info.get('annual_withdrawal', 0):,.0f}/yr  |  "
+            f"Inflation: {config_info.get('inflation_rate', 0):.1%}  |  "
+            f"Simulations: {config_info.get('num_simulations', 0):,}  |  "
+            f"Seed: {config_info.get('seed', 42)}  |  "
+            f"Data: {config_info.get('data_source', 'N/A')}"
+        )
+        fig.text(0.5, -0.02, config_text, ha='center', va='top', fontsize=8,
+                 fontfamily='monospace', usetex=False,
+                 bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
+
+    plt.suptitle(f'Parameter Sweep: {param_name.replace("_", " ").title()} ({method_label})',
+                 fontsize=14, fontweight='bold', y=0.98)
+    plt.tight_layout(rect=[0, 0.06, 1, 0.96])  # Leave room for config text at bottom
 
     if output_path:
         plt.savefig(output_path, dpi=150, bbox_inches='tight')
         print(f"  Saved: {output_path}")
 
     return fig
+
+
+def create_sweep_visualization(
+    df: pd.DataFrame,
+    param_name: str,
+    output_path: str = None,
+    has_bootstrap: bool = True,
+    config_info: dict = None
+) -> list:
+    """
+    Create separate visualizations for parametric and bootstrap sweep results.
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Results from run_parameter_sweep()
+    param_name : str
+        Name of the swept parameter
+    output_path : str, optional
+        Base path to save figures (will create _parametric.png and _bootstrap.png)
+    has_bootstrap : bool
+        Whether bootstrap data is available
+    config_info : dict, optional
+        Configuration parameters to display on the figures
+
+    Returns:
+    --------
+    list of plt.Figure
+    """
+    figures = []
+
+    # Colors
+    param_color = '#2E86AB'  # Blue for parametric
+    boot_color = '#A23B72'   # Magenta for bootstrap
+
+    # Create parametric figure
+    if output_path:
+        base_path = output_path.replace('.png', '')
+        param_path = f"{base_path}_parametric.png"
+    else:
+        param_path = None
+
+    fig_param = _create_sweep_figure(df, param_name, 'param', param_color, param_path, config_info)
+    figures.append(fig_param)
+
+    # Create bootstrap figure (if data available)
+    if has_bootstrap:
+        if output_path:
+            boot_path = f"{base_path}_bootstrap.png"
+        else:
+            boot_path = None
+
+        fig_boot = _create_sweep_figure(df, param_name, 'boot', boot_color, boot_path, config_info)
+        figures.append(fig_boot)
+
+    return figures
 
 
 # ============================================================================
@@ -937,10 +1063,15 @@ Examples:
   # Run parameter sweep from config
   uv run python src/run_mc.py --config configs/test_simple_buyhold.json --sweep
 
-  # Run custom parameter sweep
+  # Run custom parameter sweep (numeric)
   uv run python src/run_mc.py --config configs/test_simple_buyhold.json \\
       --sweep --sweep-param initial_portfolio_value \\
       --sweep-start 500000 --sweep-end 2000000 --sweep-step 500000
+
+  # Run retirement date sweep (yearly)
+  uv run python src/run_mc.py --config configs/test_simple_buyhold.json \\
+      --sweep --sweep-param retirement_date \\
+      --sweep-start 2027-01-01 --sweep-end 2039-01-01 --sweep-step 1Y
         """
     )
 
@@ -958,13 +1089,13 @@ Examples:
     parser.add_argument('--sweep', action='store_true',
                         help='Run parameter sweep from config sweep_params')
     parser.add_argument('--sweep-param', type=str, default=None,
-                        help='Parameter to sweep (overrides config)')
-    parser.add_argument('--sweep-start', type=float, default=None,
-                        help='Sweep start value')
-    parser.add_argument('--sweep-end', type=float, default=None,
-                        help='Sweep end value')
-    parser.add_argument('--sweep-step', type=float, default=None,
-                        help='Sweep step size')
+                        help='Parameter to sweep (overrides config). Supports numeric params and date params like retirement_date')
+    parser.add_argument('--sweep-start', type=str, default=None,
+                        help='Sweep start value (number or date like 2027-01-01)')
+    parser.add_argument('--sweep-end', type=str, default=None,
+                        help='Sweep end value (number or date like 2039-01-01)')
+    parser.add_argument('--sweep-step', type=str, default=None,
+                        help='Sweep step size (number or "1Y" for yearly, "1M" for monthly)')
 
     # Output
     parser.add_argument('--output', '-o', type=str, default=None,
@@ -1000,11 +1131,37 @@ Examples:
         if args.sweep_param:
             # Use CLI arguments
             param_name = args.sweep_param
-            param_values = np.arange(
-                args.sweep_start or 500000,
-                (args.sweep_end or 2000000) + (args.sweep_step or 500000) / 2,
-                args.sweep_step or 500000
-            ).tolist()
+
+            # Check if this is a date parameter
+            if _is_date_param(param_name):
+                # Date sweep
+                start_date = pd.Timestamp(args.sweep_start or '2027-01-01')
+                end_date = pd.Timestamp(args.sweep_end or '2039-01-01')
+                step = args.sweep_step or '1Y'
+
+                # Parse step (e.g., "1Y", "6M", "1M")
+                if step.endswith('Y'):
+                    freq = 'YS'  # Year start
+                    multiplier = int(step[:-1]) if len(step) > 1 else 1
+                elif step.endswith('M'):
+                    freq = 'MS'  # Month start
+                    multiplier = int(step[:-1]) if len(step) > 1 else 1
+                else:
+                    freq = 'YS'
+                    multiplier = 1
+
+                # Generate date range
+                all_dates = pd.date_range(start=start_date, end=end_date, freq=freq)
+                if multiplier > 1:
+                    all_dates = all_dates[::multiplier]
+                param_values = [d.strftime('%Y-%m-%d') for d in all_dates]
+            else:
+                # Numeric sweep
+                start = float(args.sweep_start) if args.sweep_start else 500000
+                end = float(args.sweep_end) if args.sweep_end else 2000000
+                step = float(args.sweep_step) if args.sweep_step else 500000
+                param_values = np.arange(start, end + step / 2, step).tolist()
+
         elif hasattr(config, 'sweep_params') and config.sweep_params:
             # Use config sweep_params (first one)
             sweep_config = config.sweep_params[0]
@@ -1019,8 +1176,11 @@ Examples:
             param_name = 'initial_portfolio_value'
             param_values = [500000, 1000000, 1500000, 2000000]
 
+        # Format display of values
+        first_val = _format_param_value(param_values[0], param_name)
+        last_val = _format_param_value(param_values[-1], param_name)
         print(f"  Parameter: {param_name}")
-        print(f"  Values: {len(param_values)} ({param_values[0]:,.0f} to {param_values[-1]:,.0f})")
+        print(f"  Values: {len(param_values)} ({first_val} to {last_val})")
 
         # Run sweep
         df = run_parameter_sweep(
@@ -1039,17 +1199,126 @@ Examples:
         df.to_csv(csv_path, index=False)
         print(f"\nResults saved to: {csv_path}")
 
-        # Print summary
+        # Check if bootstrap columns exist in results
+        has_bootstrap = 'acc_p50_boot' in df.columns
+
+        # Print summary (transposed for readability)
         print("\n" + "=" * 80)
         print("PARAMETER SWEEP RESULTS")
         print("=" * 80)
-        print(df.to_string(index=False, float_format=lambda x: f'{x:,.0f}' if abs(x) > 100 else f'{x:.3f}'))
 
-        # Create visualization
+        # Print config context
+        # Calculate decumulation end date
+        retirement_dt = pd.Timestamp(config.retirement_date)
+        dec_end_date = retirement_dt + pd.DateOffset(years=int(config.get_decumulation_years()))
+        dec_end_str = dec_end_date.strftime('%b %Y')  # e.g., "Jan 2054"
+
+        print("\nConfiguration:")
+        print(f"  Ticker file:        {config.ticker_file}")
+        print(f"  Mean returns file:  {config.simulated_mean_returns_file}")
+        print(f"  Cov matrices file:  {config.simulated_cov_matrices_file}")
+        print(f"  Initial value:      ${config.initial_portfolio_value:,.0f}")
+        print(f"  Retirement date:    {config.retirement_date}")
+        print(f"  Decumulation end:   {dec_end_str}")
+        print(f"  Simulation freq:    {config.simulation_frequency}")
+        print(f"  Contribution:       ${config.contribution_amount:,.0f} ({config.contribution_frequency})")
+        print(f"  Employer match:     {config.employer_match_rate:.1%}")
+        print(f"  Annual withdrawal:  ${config.annual_withdrawal_amount:,.0f} ({config.withdrawal_frequency})")
+        print(f"  Inflation rate:     {config.inflation_rate:.1%}")
+        print(f"  MC simulations:     {args.sims or config.num_mc_simulations:,}")
+        print(f"  Random seed:        {args.seed}")
+        print(f"  Data source:        {'Yahoo Finance + Parametric' if has_bootstrap else 'Parametric only'}")
+        print(f"\nSweep Parameter: {param_name.replace('_', ' ').title()}")
+
+        # Format parameter values as column headers
+        is_date = _is_date_param(param_name)
+        param_headers = []
+        for val in df[param_name].values:
+            param_headers.append(_format_param_value(val, param_name))
+
+        # Print transposed table with metrics as rows
+        col_width = 14 if not is_date else 12
+        param_label = param_name.replace('_', ' ').title()
+        header_row = f"{'Metric':<25}" + "".join(f"{h:>{col_width}}" for h in param_headers)
+        print(f"\n{param_label + ':':<25}" + "".join(f"{h:>{col_width}}" for h in param_headers))
+        print("-" * len(header_row))
+
+        # Accumulation metrics
+        print("\nAccumulation (at retirement):")
+        for pct in [5, 25, 50, 75, 95]:
+            row = f"  P{pct} Parametric"
+            row = f"{row:<25}"
+            for _, r in df.iterrows():
+                val = r[f'acc_p{pct}_param']
+                row += f"${val/1e6:>{col_width-1}.2f}M"
+            print(row)
+
+        if has_bootstrap:
+            for pct in [5, 25, 50, 75, 95]:
+                row = f"  P{pct} Bootstrap"
+                row = f"{row:<25}"
+                for _, r in df.iterrows():
+                    val = r[f'acc_p{pct}_boot']
+                    row += f"${val/1e6:>{col_width-1}.2f}M"
+                print(row)
+
+        # Decumulation metrics
+        print("\nDecumulation (final):")
+        for pct in [5, 25, 50, 75, 95]:
+            row = f"  P{pct} Parametric"
+            row = f"{row:<25}"
+            for _, r in df.iterrows():
+                val = r[f'dec_p{pct}_param']
+                row += f"${val/1e6:>{col_width-1}.2f}M"
+            print(row)
+
+        if has_bootstrap:
+            for pct in [5, 25, 50, 75, 95]:
+                row = f"  P{pct} Bootstrap"
+                row = f"{row:<25}"
+                for _, r in df.iterrows():
+                    val = r[f'dec_p{pct}_boot']
+                    row += f"${val/1e6:>{col_width-1}.2f}M"
+                print(row)
+
+        # Success rates
+        print("\nSuccess Rate:")
+        row = f"{'  Parametric':<25}"
+        for _, r in df.iterrows():
+            row += f"{r['dec_success_param']*100:>{col_width}.1f}%"
+        print(row)
+
+        if has_bootstrap:
+            row = f"{'  Bootstrap':<25}"
+            for _, r in df.iterrows():
+                row += f"{r['dec_success_boot']*100:>{col_width}.1f}%"
+            print(row)
+
+        # Create visualization (separate files for parametric and bootstrap)
         if not args.no_plot:
+            # Build config info dict for visualization
+            config_info = {
+                'sweep_param': param_name.replace('_', ' ').title(),
+                'ticker_file': config.ticker_file,
+                'mean_returns_file': config.simulated_mean_returns_file,
+                'cov_matrices_file': config.simulated_cov_matrices_file,
+                'initial_value': config.initial_portfolio_value,
+                'retirement_date': config.retirement_date,
+                'dec_end_date': dec_end_str,
+                'simulation_frequency': config.simulation_frequency,
+                'contribution_amount': config.contribution_amount,
+                'contribution_frequency': config.contribution_frequency,
+                'employer_match_rate': config.employer_match_rate,
+                'annual_withdrawal': config.annual_withdrawal_amount,
+                'inflation_rate': config.inflation_rate,
+                'num_simulations': args.sims or config.num_mc_simulations,
+                'seed': args.seed,
+                'data_source': 'Yahoo Finance + Parametric' if has_bootstrap else 'Parametric only',
+            }
             plot_path = sweep_dir / f'{param_name}_sweep.png'
-            fig = create_sweep_visualization(df, param_name, str(plot_path))
-            plt.close(fig)
+            figures = create_sweep_visualization(df, param_name, str(plot_path), has_bootstrap, config_info)
+            for fig in figures:
+                plt.close(fig)
 
     else:
         # Single run mode
@@ -1156,7 +1425,7 @@ Examples:
             print("\n[3/3] Creating visualization...")
             plot_path = output_dir / 'mc_lifecycle.png'
             fig = create_single_run_visualization(
-                result, config, data_source, str(plot_path)
+                result, config, str(plot_path)
             )
             plt.close(fig)
 
