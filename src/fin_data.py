@@ -202,8 +202,8 @@ class FinData:
         pd.DataFrame with Close and Volume columns or None if failed
         """
         try:
-            data = yf.download(ticker, start=self.start_date, end=self.end_date, 
-                             interval='1d')[['Close', 'Volume']]
+            data = yf.download(ticker, start=self.start_date, end=self.end_date,
+                             interval='1d', auto_adjust=True)[['Close', 'Volume']]
             logging.info(f"Downloaded {len(data)} days of data for {ticker}")
             return data
         except Exception as e:

@@ -1542,6 +1542,143 @@ This design allows:
 
 ---
 
+## Data Loading and Market Data
+
+### Overview
+
+The system uses `src/data/market_data.py` for all market data operations. The simplified data loading flow:
+
+```
+run_mc.py
+    │
+    ├── Try load_returns_data(mode='yahoo')
+    │   │
+    │   ├── SUCCESS → historical_returns available
+    │   │             tickers from tickers.txt
+    │   │             Run BOTH parametric AND bootstrap
+    │   │
+    │   └── FAIL → No historical data
+    │              tickers = sim_params.tickers
+    │              Run PARAMETRIC ONLY (skip bootstrap)
+    │
+    └── MCPathGenerator → run_accumulation_mc() / run_decumulation_mc()
+```
+
+### Key Functions in market_data.py
+
+**`load_returns_data(mode, tickers, frequency, start_date, end_date, use_cache)`**
+- Primary data loading function for Monte Carlo simulations
+- Supports `mode='yahoo'` for Yahoo Finance data
+- Returns `(returns_df, price_df)` tuple
+- `use_cache=False` recommended to avoid stale data issues
+
+**`fetch_yahoo_finance_data(tickers, frequency, start_date, end_date, use_cache)`**
+- Low-level Yahoo Finance fetcher
+- Handles caching to `output/cache/` directory
+- Supports frequencies: 'D' (daily), 'W' (weekly), 'M' (monthly)
+
+**`FinData` class**
+- Full-featured market data manager with pickle caching
+- Used for historical backtesting and parameter estimation
+- Handles multi-ticker downloads with proper error handling
+
+### Using CSV Data Instead of Yahoo Finance
+
+For offline use or custom data, you can provide CSV files:
+
+**Option 1: Pre-cached returns CSV**
+```python
+# Place CSV files in output/cache/:
+# - market_data_cache_returns.csv (returns data)
+# - market_data_cache_prices.csv (price data)
+
+# Format: DatetimeIndex, columns = ticker symbols
+# Example:
+#   Date,SPY,AGG,NVDA,GLD
+#   2024-01-08,0.012,-0.003,0.045,0.002
+#   2024-01-15,0.008,0.001,0.023,-0.001
+```
+
+**Option 2: Custom data loader**
+```python
+import pandas as pd
+
+def load_custom_returns(csv_path: str) -> pd.DataFrame:
+    """Load returns from custom CSV file."""
+    df = pd.read_csv(csv_path, index_col=0, parse_dates=True)
+    return df
+
+# Use in run_mc.py by modifying load_bootstrap_data():
+returns_df = load_custom_returns('path/to/your/returns.csv')
+```
+
+**Option 3: Simulated data for testing**
+```python
+from src import simulated_data_params as sim_params
+
+# Get known parameters for validation testing
+tickers = sim_params.tickers  # ['BIL', 'MSFT', 'NVDA', 'SPY']
+mean, cov = sim_params.get_accumulation_params()
+
+# Use directly in MCPathGenerator
+generator = MCPathGenerator(tickers, mean, cov, seed=42)
+```
+
+### Ticker Configuration
+
+Tickers are read from `tickers.txt`:
+```
+Symbol,Weight
+SPY,0.4
+AGG,0.3
+NVDA,0.2
+GLD,0.1
+```
+
+The `_get_tickers_from_config()` function in `run_mc.py`:
+1. Reads `ticker_file` path from config
+2. Extracts `Symbol` column as ticker list
+3. Falls back to `sim_params.tickers` if file not found
+
+### Mean/Covariance Source Selection
+
+When historical data is available, the system chooses mean/cov source:
+
+| Scenario | Tickers Used | Mean/Cov Source |
+|----------|--------------|-----------------|
+| Yahoo available, tickers match sim_params | From tickers.txt | sim_params |
+| Yahoo available, tickers differ | From tickers.txt | Historical data |
+| Yahoo unavailable | sim_params.tickers | sim_params |
+
+This allows:
+- **Validation testing**: Use sim_params tickers to get known mean/cov
+- **Production use**: Use real tickers to get historical statistics
+
+### Cache Management
+
+**CSV Cache** (`output/cache/`):
+- `market_data_cache_returns.csv` - Returns data
+- `market_data_cache_prices.csv` - Price data
+- Cache key based on filename only (not tickers!)
+- Use `use_cache=False` to force fresh data
+
+**Pickle Cache** (`output/cache/`):
+- `price_data_{start}_{end}_{hash}.pkl` - FinData pickle cache
+- Hash includes ticker list for proper versioning
+- Delete to force re-download: `rm output/cache/*.pkl`
+
+**Common Issue**: Stale cache with wrong tickers
+```
+# Symptom: Wrong columns in loaded data
+# tickers: ['bonds', 'stocks', ...] != expected: ['SPY', 'AGG', ...]
+
+# Solution: Delete cache and re-fetch
+rm output/cache/market_data_cache_*.csv
+rm output/cache/*.pkl
+```
+
+---
+
 ## Code Quality Standards
 
 When working on lifecycle simulation code:

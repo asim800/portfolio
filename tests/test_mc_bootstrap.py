@@ -31,6 +31,7 @@ from src.config import SystemConfig
 from src.montecarlo import MCPathGenerator
 from src.montecarlo.lifecycle import run_accumulation_mc, run_decumulation_mc
 from src.data.market_data import load_returns_data
+from src.data import simulated as sim_params
 
 np.set_printoptions(linewidth=100)
 
@@ -38,6 +39,217 @@ np.set_printoptions(linewidth=100)
 # ============================================================================
 # Helper Functions
 # ============================================================================
+
+def create_historical_data(config: SystemConfig, tickers: list, seed: int = 42) -> pd.DataFrame:
+    """
+    Generate synthetic historical returns data for bootstrap testing.
+
+    Uses simulated_data_params module to respect config-based parameters.
+
+    Parameters:
+    -----------
+    config : SystemConfig
+        Configuration object with simulation_frequency
+    tickers : list
+        List of ticker symbols
+    seed : int
+        Random seed for reproducibility
+
+    Returns:
+    --------
+    pd.DataFrame: Historical returns with date index and asset columns
+    """
+    periods_per_year = config.frequency_to_periods_per_year(config.simulation_frequency)
+
+    # Use simulated_data_params to create returns (respects config parameters)
+    # Scale from daily to config frequency
+    n_days = 25 * 252  # 25 years of daily data
+    returns_daily = sim_params.create_simulated_returns_data(
+        tickers=tickers,
+        num_days=n_days,
+        seed=seed
+    )
+
+    # Resample to config frequency
+    freq_map = {'daily': 'D', 'weekly': 'W', 'biweekly': '2W', 'monthly': 'ME', 'quarterly': 'QE', 'annual': 'YE'}
+    pandas_freq = freq_map.get(config.simulation_frequency, 'W')
+
+    # Add date index for resampling
+    returns_daily.index = pd.date_range('2000-01-01', periods=len(returns_daily), freq='D')
+
+    # Resample by summing returns (approximate for small returns)
+    if pandas_freq != 'D':
+        returns_data = returns_daily.resample(pandas_freq).sum()
+    else:
+        returns_data = returns_daily
+
+    return returns_data
+
+
+def run_bootstrap_comparison(
+    config: SystemConfig,
+    historical_data: pd.DataFrame,
+    num_simulations: int = 200,
+    seed: int = 42
+) -> dict:
+    """
+    Run parametric vs bootstrap comparison and return results.
+
+    Parameters:
+    -----------
+    config : SystemConfig
+        Configuration object with lifecycle parameters
+    historical_data : pd.DataFrame
+        Historical returns data for bootstrap sampling
+    num_simulations : int
+        Number of Monte Carlo simulations
+    seed : int
+        Random seed for reproducibility
+
+    Returns:
+    --------
+    dict with keys:
+        - 'acc_percentiles_param': dict of {5, 25, 50, 75, 95: value}
+        - 'acc_percentiles_boot': dict of {5, 25, 50, 75, 95: value}
+        - 'dec_percentiles_param': dict of {5, 25, 50, 75, 95: value}
+        - 'dec_percentiles_boot': dict of {5, 25, 50, 75, 95: value}
+        - 'dec_success_param': float (success rate)
+        - 'dec_success_boot': float (success rate)
+        - 'acc_values_param': np.ndarray (num_sims, periods)
+        - 'acc_values_boot': np.ndarray (num_sims, periods)
+        - 'dec_values_param': np.ndarray (num_sims, periods)
+        - 'dec_values_boot': np.ndarray (num_sims, periods)
+    """
+    tickers = list(historical_data.columns)
+    periods_per_year = config.frequency_to_periods_per_year(config.simulation_frequency)
+    num_assets = len(tickers)
+
+    # Get parameters from simulated_data_params (like test_mc_validation.py)
+    mean_returns, cov_matrix = sim_params.get_accumulation_params(regularize=True)
+
+    # Get lifecycle parameters
+    acc_years = int(config.get_accumulation_years())
+    dec_years = int(config.get_decumulation_years())
+    initial_value = config.initial_portfolio_value
+
+    # Get contribution config
+    contribution_config = config.get_contribution_config()
+    if contribution_config:
+        contribution = contribution_config.get('amount', 0)
+        contribution_freq = config.frequency_to_periods_per_year(config.contribution_frequency)
+    else:
+        contribution = 0
+        contribution_freq = periods_per_year
+
+    # Get withdrawal config
+    withdrawal_config = config.get_withdrawal_config()
+    if withdrawal_config:
+        withdrawal = withdrawal_config.get('annual_amount', 0)
+        inflation = withdrawal_config.get('inflation_rate', 0.02)
+        withdrawal_freq = config.frequency_to_periods_per_year(config.withdrawal_frequency)
+    else:
+        withdrawal = 0
+        inflation = 0.02
+        withdrawal_freq = periods_per_year
+
+    # Create generator
+    gen = MCPathGenerator(
+        tickers=tickers,
+        mean_returns=mean_returns,
+        cov_matrix=cov_matrix,
+        seed=seed
+    )
+
+    # Equal weights for all assets (e.g., 25% each for 4 assets)
+    weights = np.ones(num_assets) / num_assets
+
+    # Generate lifecycle paths (parametric)
+    acc_paths_param, dec_paths_param = gen.generate_paths(
+        num_simulations=num_simulations,
+        accumulation_years=acc_years,
+        decumulation_years=dec_years,
+        periods_per_year=periods_per_year,
+        sampling_method='parametric'
+    )
+
+    # Generate lifecycle paths (bootstrap)
+    acc_paths_boot, dec_paths_boot = gen.generate_paths(
+        num_simulations=num_simulations,
+        accumulation_years=acc_years,
+        decumulation_years=dec_years,
+        periods_per_year=periods_per_year,
+        historical_returns=historical_data,
+        sampling_method='bootstrap'
+    )
+
+    # Run accumulation (parametric)
+    acc_values_param = run_accumulation_mc(
+        initial_value=initial_value,
+        weights=weights,
+        asset_returns_paths=acc_paths_param,
+        asset_returns_frequency=periods_per_year,
+        years=acc_years,
+        contributions_per_year=contribution_freq,
+        contribution_amount=contribution,
+    )
+
+    # Run accumulation (bootstrap)
+    acc_values_boot = run_accumulation_mc(
+        initial_value=initial_value,
+        weights=weights,
+        asset_returns_paths=acc_paths_boot,
+        asset_returns_frequency=periods_per_year,
+        years=acc_years,
+        contributions_per_year=contribution_freq,
+        contribution_amount=contribution,
+    )
+
+    final_acc_param = acc_values_param[:, -1]
+    final_acc_boot = acc_values_boot[:, -1]
+
+    # Run decumulation (parametric)
+    dec_values_param, success_param = run_decumulation_mc(
+        initial_values=final_acc_param,
+        weights=weights,
+        asset_returns_paths=dec_paths_param,
+        asset_returns_frequency=periods_per_year,
+        annual_withdrawal=withdrawal,
+        inflation_rate=inflation,
+        years=dec_years,
+        withdrawals_per_year=withdrawal_freq,
+    )
+
+    # Run decumulation (bootstrap)
+    dec_values_boot, success_boot = run_decumulation_mc(
+        initial_values=final_acc_boot,
+        weights=weights,
+        asset_returns_paths=dec_paths_boot,
+        asset_returns_frequency=periods_per_year,
+        annual_withdrawal=withdrawal,
+        inflation_rate=inflation,
+        years=dec_years,
+        withdrawals_per_year=withdrawal_freq,
+    )
+
+    final_dec_param = dec_values_param[:, -1]
+    final_dec_boot = dec_values_boot[:, -1]
+
+    # Collect percentiles
+    percentiles = [5, 25, 50, 75, 95]
+
+    return {
+        'acc_percentiles_param': {p: np.percentile(final_acc_param, p) for p in percentiles},
+        'acc_percentiles_boot': {p: np.percentile(final_acc_boot, p) for p in percentiles},
+        'dec_percentiles_param': {p: np.percentile(final_dec_param, p) for p in percentiles},
+        'dec_percentiles_boot': {p: np.percentile(final_dec_boot, p) for p in percentiles},
+        'dec_success_param': success_param.mean(),
+        'dec_success_boot': success_boot.mean(),
+        'acc_values_param': acc_values_param,
+        'acc_values_boot': acc_values_boot,
+        'dec_values_param': dec_values_param,
+        'dec_values_boot': dec_values_boot,
+    }
+
 
 def create_bootstrap_comparison_visualization(
     parametric_paths, iid_paths, block_paths, stationary_paths,
@@ -373,32 +585,31 @@ print(f"  Block size: {BLOCK_SIZE} periods")
 # Step 1: Create synthetic historical data for reproducible testing
 print("\n[1/5] Creating historical market data...")
 
-# Use synthetic data for reproducible testing
-np.random.seed(SEED)
-n_hist = 25 * PERIODS_PER_YEAR  # 25 years at config frequency
+# Get tickers from simulated_data_params (matches test_mc_validation.py)
+tickers = ['BIL', 'MSFT', 'NVDA', 'SPY']
 
-# Create date range matching config frequency
-freq_map = {'daily': 'D', 'weekly': 'W', 'biweekly': '2W', 'monthly': 'ME', 'quarterly': 'QE', 'annual': 'YE'}
-pandas_freq = freq_map.get(config.simulation_frequency, 'ME')
-dates = pd.date_range('2000-01-01', periods=n_hist, freq=pandas_freq)
+# Use simulated data parameters (respects config.use_simulated_data)
+if config.use_simulated_data:
+    print("  Using simulated data for parameter estimation...")
+    returns_data = sim_params.create_simulated_returns_data(
+        tickers=tickers,
+        num_days=sim_params.NUM_DAYS,
+        seed=sim_params.RANDOM_SEED
+    )
+    print(f"  ✓ Generated {len(returns_data)} days of simulated returns")
 
-# Create correlated returns (2 assets only for simplicity)
-# Scale mean and variance to match frequency
-annual_mean = np.array([0.10, 0.05])  # 10% stocks, 5% bonds annually
-annual_cov = np.array([[0.04, 0.005],   # Annual variance/covariance
-                       [0.005, 0.01]])
+    # Resample to config frequency if needed
+    freq_map = {'daily': 'D', 'weekly': 'W', 'biweekly': '2W', 'monthly': 'ME', 'quarterly': 'QE', 'annual': 'YE'}
+    pandas_freq = freq_map.get(config.simulation_frequency, 'W')
+    returns_data.index = pd.date_range('2000-01-01', periods=len(returns_data), freq='D')
 
-# Scale to period frequency
-period_mean = annual_mean / PERIODS_PER_YEAR
-period_cov = annual_cov / PERIODS_PER_YEAR
+    if pandas_freq != 'D':
+        returns_data = returns_data.resample(pandas_freq).sum()
+        print(f"  ✓ Resampled to {config.simulation_frequency}: {len(returns_data)} periods")
+else:
+    # Use historical data (would require FinData)
+    raise NotImplementedError("Bootstrap test currently requires use_simulated_data=True")
 
-returns_array = np.random.multivariate_normal(period_mean, period_cov, size=n_hist)
-
-returns_data = pd.DataFrame(
-    returns_array,
-    index=dates,
-    columns=['stocks', 'bonds']
-)
 print(f"  ✓ Created synthetic data: {len(returns_data)} periods ({config.simulation_frequency})")
 
 tickers = list(returns_data.columns)
@@ -417,9 +628,8 @@ print(f"    Correlation:             {hist_corr.iloc[0, 1]:.4f}")
 # Step 2: Generate paths with different methods
 print("\n[2/5] Generating Monte Carlo paths...")
 
-# For parametric, estimate parameters from historical data
-mean_returns = hist_mean.values * PERIODS_PER_YEAR  # Annualize
-cov_matrix = returns_data.cov().values * PERIODS_PER_YEAR  # Annualize
+# Get parameters from simulated_data_params (like test_mc_validation.py)
+mean_returns, cov_matrix = sim_params.get_accumulation_params(regularize=True)
 
 gen = MCPathGenerator(
     tickers=tickers,
@@ -534,8 +744,9 @@ print(f"    Initial value: ${INITIAL_VALUE:,.0f}")
 print(f"    Contribution: ${CONTRIBUTION:,.0f} ({config.contribution_frequency})")
 print(f"    Withdrawal: ${WITHDRAWAL:,.0f}/year")
 
-# Use 60/40 weights for simplicity (stocks/bonds)
-weights = np.array([0.6, 0.4])  # 60/40 portfolio
+# Equal weights for all assets (e.g., 25% each for 4 assets)
+num_assets = len(tickers)
+weights = np.ones(num_assets) / num_assets
 
 # Regenerate paths for lifecycle
 print("  Generating lifecycle paths (parametric)...")

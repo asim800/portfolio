@@ -16,6 +16,7 @@ Usage:
 """
 
 import sys
+import os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -173,7 +174,10 @@ print("=" * 80)
 # Step 1: Load config and data
 print("\n[1/6] Loading configuration and data...")
 config = SystemConfig.from_json('../configs/test_simple_buyhold.json')
-tickers_df = pd.read_csv(config.ticker_file)
+# Resolve ticker file path relative to project root (one level up from src/)
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+ticker_file = config.ticker_file if os.path.isabs(config.ticker_file) else os.path.join(PROJECT_ROOT, config.ticker_file)
+tickers_df = pd.read_csv(ticker_file)
 tickers = tickers_df['Symbol'].tolist()
 weights_dict = dict(zip(tickers_df['Symbol'], tickers_df['Weight']))
 weights_df = pd.Series(weights_dict)
@@ -230,10 +234,13 @@ retirement_date_config = SystemConfig.align_date_to_frequency(
 
 ## Create time-varying mean and covariance data from files
 # Read mean returns from file (2 rows: accumulation, decumulation)
-mean_returns_df = pd.read_csv(SystemConfig.simulated_mean_returns_file, index_col=0)
+# Resolve paths relative to project root
+mean_file = config.simulated_mean_returns_file if os.path.isabs(config.simulated_mean_returns_file) else os.path.join(PROJECT_ROOT, config.simulated_mean_returns_file)
+cov_file = config.simulated_cov_matrices_file if os.path.isabs(config.simulated_cov_matrices_file) else os.path.join(PROJECT_ROOT, config.simulated_cov_matrices_file)
+mean_returns_df = pd.read_csv(mean_file, index_col=0)
 
 # Load covariance matrices from file as 2D array (2 regimes × n_assets × n_assets flattened)
-cov_matrices_2d = np.loadtxt(SystemConfig.simulated_cov_matrices_file)
+cov_matrices_2d = np.loadtxt(cov_file)
 
 # Get asset count from mean returns
 n_assets = mean_returns_df.shape[1]

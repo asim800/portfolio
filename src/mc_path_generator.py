@@ -182,18 +182,11 @@ class MCPathGenerator:
               period_mean = mean_array[period]
               period_cov = cov_array[period]
 
-              # SAMPLE: Multivariate Gaussian for this period
-              paths[nmc, period, :] = np.random.multivariate_normal(
-                  mean=period_mean,
-                  cov=period_cov
-              )
-
+              # SAMPLE: Multivariate Gaussian using Cholesky decomposition
+              # z ~ N(0, I), then x = mean + cholesky @ z gives x ~ N(mean, cov)
               self.cholesky = np.linalg.cholesky(period_cov)
-              paths[nmc, period, :] = np.random.standard_normal(
-                  size=(self.num_assets,)
-              )
-
-              paths[nmc, period, :] = np.dot(self.cholesky, paths[nmc, period, :])
+              z = np.random.standard_normal(size=(self.num_assets,))
+              paths[nmc, period, :] = period_mean + np.dot(self.cholesky, z)
 
         # ====================================================================
         # END OF SAMPLING - Everything after is just reshaping/splitting

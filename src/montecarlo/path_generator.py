@@ -231,16 +231,24 @@ class MCPathGenerator:
                 bootstrap_returns, block_bootstrap, stationary_bootstrap
             )
 
+            # Resample historical returns to match simulation frequency
+            # historical_returns may be daily (252/year), need to convert to periods_per_year
+            # TODO check if needed
+            # resampled_returns = self._resample_returns_to_frequency(
+            #     historical_returns, periods_per_year
+            # )
+            resampled_returns = historical_returns
+
             for nmc in range(num_simulations):
                 # Each simulation gets unique seed for different bootstrap sample
                 sim_seed = self.seed + nmc if self.seed else None
 
                 if sampling_method == 'bootstrap':
-                    sampled = bootstrap_returns(historical_returns, total_periods, sim_seed)
+                    sampled = bootstrap_returns(resampled_returns, total_periods, sim_seed)
                 elif sampling_method == 'bootstrap_block':
-                    sampled = block_bootstrap(historical_returns, total_periods, block_size, sim_seed)
+                    sampled = block_bootstrap(resampled_returns, total_periods, block_size, sim_seed)
                 elif sampling_method == 'bootstrap_stationary':
-                    sampled = stationary_bootstrap(historical_returns, total_periods, block_size, sim_seed)
+                    sampled = stationary_bootstrap(resampled_returns, total_periods, block_size, sim_seed)
 
                 # Extract columns in ticker order
                 paths[nmc, :, :] = sampled[self.tickers].values
@@ -481,6 +489,51 @@ class MCPathGenerator:
                 cov_array[i] = annual_cov / periods_per_year
 
         return cov_array
+
+    def _resample_returns_to_frequency(self,
+                                       daily_returns: pd.DataFrame,
+                                       periods_per_year: int) -> pd.DataFrame:
+        """
+        Resample daily returns to target frequency using geometric compounding.
+
+        Parameters:
+        -----------
+        daily_returns : pd.DataFrame
+            Daily returns with DatetimeIndex
+        periods_per_year : int
+            Target frequency (52=weekly, 26=biweekly, 12=monthly)
+
+        Returns:
+        --------
+        pd.DataFrame
+            Returns at target frequency, geometrically compounded
+        """
+        # Map periods_per_year to pandas frequency
+        freq_map = {
+            252: 'D',   # Daily (no change)
+            52: 'W',    # Weekly
+            26: '2W',   # Biweekly
+            12: 'ME',   # Monthly
+            4: 'QE',    # Quarterly
+            1: 'YE'     # Yearly
+        }
+
+        if periods_per_year == 252:
+            return daily_returns  # Already daily
+
+        target_freq = freq_map.get(periods_per_year)
+        if target_freq is None:
+            raise ValueError(f"Unsupported periods_per_year: {periods_per_year}. "
+                            f"Supported: {list(freq_map.keys())}")
+
+        # Geometric compounding: (1+r1)*(1+r2)*...*(1+rn) - 1
+        # Group by target frequency and compound returns
+        resampled = (1 + daily_returns).resample(target_freq).prod() - 1
+
+        # Drop any NaN rows (incomplete periods at start/end)
+        resampled = resampled.dropna()
+
+        return resampled
 
     @staticmethod
     def calculate_portfolio_return(weights: np.ndarray, asset_returns: np.ndarray) -> np.ndarray:

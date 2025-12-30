@@ -56,6 +56,9 @@ class SystemConfig:
     simulated_mean_returns_file: str = '../data/simulated_mean_returns.csv'  # CSV file with mean returns (acc/dec regimes)
     simulated_cov_matrices_file: str = '../data/simulated_cov_matrices.txt'  # Text file with 3D covariance array (acc/dec regimes)
 
+    # Parameter sweep settings (for run_mc.py)
+    sweep_params: Optional[List[Dict[str, Any]]] = None  # List of {name, start, end, step} dicts for parameter sweeps
+
     # Contribution/Savings Strategy (for accumulation phase - optional)
     contribution_amount: Optional[float] = None         # Fixed contribution amount per period
     contribution_frequency: str = 'biweekly'            # Contribution frequency: 'weekly', 'biweekly', 'monthly', 'annual'

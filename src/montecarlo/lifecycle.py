@@ -10,6 +10,7 @@ Extracted from src/visualize_mc_lifecycle.py.
 
 import numpy as np
 from typing import Tuple, Optional
+import matplotlib.pyplot as plt
 
 from .path_generator import MCPathGenerator
 
@@ -72,7 +73,9 @@ def run_accumulation_mc(
         asset_returns_paths = asset_returns_paths.reshape(
             num_simulations, expected_periods, freq_ratio, weights.shape[0]
         )
-        asset_returns_paths = asset_returns_paths.sum(axis=2).squeeze()
+        # Use geometric compounding instead of additive sum
+        # (1+r1)*(1+r2)*...*(1+rn) - 1 = compound return over n periods
+        asset_returns_paths = np.prod(1 + asset_returns_paths, axis=2) - 1
 
     # Initialize results
     values = np.zeros((num_simulations, expected_periods + 1))
@@ -159,6 +162,7 @@ def run_decumulation_mc(
     """
     num_simulations = len(initial_values)
     expected_periods = years * withdrawals_per_year
+    # expected_periods = asset_returns_paths.shape[1]
 
     freq_ratio = asset_returns_frequency / withdrawals_per_year
 
@@ -171,7 +175,9 @@ def run_decumulation_mc(
         asset_returns_paths = asset_returns_paths.reshape(
             num_simulations, expected_periods, freq_ratio, weights.shape[0]
         )
-        asset_returns_paths = asset_returns_paths.sum(axis=2).squeeze()
+        # Use geometric compounding instead of additive sum
+        # (1+r1)*(1+r2)*...*(1+rn) - 1 = compound return over n periods
+        asset_returns_paths = np.prod(1 + asset_returns_paths, axis=2) - 1
 
     total_periods = asset_returns_paths.shape[1]
 
@@ -196,6 +202,7 @@ def run_decumulation_mc(
 
             portfolio_value *= (1 + portfolio_return)
 
+            # if (period %freq_ratio) == 0:
             current_year = (period - 1) // withdrawals_per_year
             inflation_factor = (1 + inflation_rate) ** current_year
             withdrawal = period_withdrawal * inflation_factor

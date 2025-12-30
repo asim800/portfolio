@@ -2,7 +2,7 @@
   "_comment": "Simple buy-and-hold test: backtest 2024-2025, then MC sim for accumulation+decumulation",
   "_dates_description": "start_date/end_date: historical data period, mc_start_date: MC sim start, retirement_date: end of accumulation, simulation_horizon: end of decumulation",
 
-  "start_date": "2024-01-01",
+  "start_date": "2005-01-01",
   "end_date": "2025-09-19",
   "mc_start_date": "2025-10-01",
   "ticker_file": "tickers.txt",
@@ -55,5 +55,21 @@
   "use_simulated_data": true,
   "mc_reindex_method": "ffill",
   "simulated_mean_returns_file": "output/cache/simulated_mean_returns.csv",
-  "simulated_cov_matrices_file": "output/cache/simulated_cov_matrices.txt"
+  "simulated_cov_matrices_file": "output/cache/simulated_cov_matrices.txt",
+
+  "_sweep_settings": "Parameter sweep configurations for run_mc.py",
+  "sweep_params": [
+    {
+      "name": "initial_portfolio_value",
+      "start": 500000,
+      "end": 2000000,
+      "step": 500000
+    },
+    {
+      "name": "annual_withdrawal_amount",
+      "start": 20000,
+      "end": 80000,
+      "step": 10000
+    }
+  ]
 }

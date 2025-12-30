@@ -24,20 +24,21 @@ REINDEX_METHOD = 'ffill'
 # ============================================================================
 # Annual mean returns for accumulation phase
 # Order: [BIL, MSFT, NVDA, SPY]
+tickers = ['SPY', 'AGG', 'NVDA', 'GLD']  # sim_params tickers (matches tickers.txt)
 MEAN_ANNUAL_ACC = np.array([
-    0.025,   # BIL: 2.5% (low return, cash-like)
+    0.05,    # SPY: 5%
+    0.025,   # AGG: 2.5% (low return, cash-like)
     0.15,    # MSFT: 15%
-    0.175,   # NVDA: 17.5% (high return)
-    0.05     # SPY: 5%
+    0.175    # NVDA: 17.5% (high return)
 ])
 
 # Annual covariance matrix for accumulation phase
 # Order: [BIL, MSFT, NVDA, SPY]
 COV_ANNUAL_ACC = np.array([
+    [0.0001, 0.0150, 0.0200, 0.0400],  # SPY
     [0.0001, 0.0002, 0.0003, 0.0001],  # BIL (low volatility)
     [0.0002, 0.0400, 0.0300, 0.0150],  # MSFT
-    [0.0003, 0.0300, 0.0900, 0.0200],  # NVDA (high volatility)
-    [0.0001, 0.0150, 0.0200, 0.0400]   # SPY
+    [0.0003, 0.0300, 0.0900, 0.0200]   # NVDA (high volatility)
 ])
 
 
