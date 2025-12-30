@@ -39,6 +39,62 @@ from src.data.market_data import load_returns_data
 import ipdb
 
 # ============================================================================
+# Parameter Sweep Registry
+# ============================================================================
+
+SWEEP_PARAMS = {
+    'initial_portfolio_value': {
+        'type': 'currency',
+        'default_range': (500_000, 2_000_000, 500_000),
+        'description': 'Initial portfolio value at MC start',
+    },
+    'annual_withdrawal_amount': {
+        'type': 'currency',
+        'default_range': (20_000, 80_000, 10_000),
+        'description': 'Annual withdrawal amount during decumulation',
+    },
+    'contribution_amount': {
+        'type': 'currency',
+        'default_range': (0, 5_000, 500),
+        'description': 'Per-period contribution amount',
+    },
+    'inflation_rate': {
+        'type': 'percentage',
+        'default_range': (0.01, 0.06, 0.01),
+        'description': 'Annual inflation rate',
+    },
+    'retirement_date': {
+        'type': 'date',
+        'default_range': ('2027-01-01', '2039-01-01', '1Y'),
+        'description': 'Retirement date',
+    },
+    'simulation_horizon_years': {
+        'type': 'numeric',
+        'default_range': (15, 30, 5),
+        'description': 'Years in decumulation phase',
+    },
+    'employer_match_rate': {
+        'type': 'percentage',
+        'default_range': (0.0, 0.10, 0.02),
+        'description': 'Employer match rate',
+    },
+}
+
+
+def _get_param_type(param_name: str) -> str:
+    """Get parameter type from registry."""
+    return SWEEP_PARAMS.get(param_name, {}).get('type', 'numeric')
+
+
+def _get_default_range(param_name: str) -> tuple:
+    """Get default sweep range from registry."""
+    param_info = SWEEP_PARAMS.get(param_name)
+    if param_info:
+        return param_info['default_range']
+    return None
+
+
+# ============================================================================
 # Helper Functions
 # ============================================================================
 
@@ -385,20 +441,40 @@ def run_mc_simulation(
 
 def _is_date_param(param_name: str) -> bool:
     """Check if parameter is a date type."""
-    return 'date' in param_name.lower()
+    return _get_param_type(param_name) == 'date'
 
 
 def _format_param_value(value, param_name: str) -> str:
-    """Format parameter value for display."""
-    if _is_date_param(param_name):
+    """
+    Format parameter value for display using registry type.
+
+    Uses SWEEP_PARAMS registry to determine formatting:
+    - 'currency': $1.5M, $500K, $1,000
+    - 'percentage': 3.0%
+    - 'date': YYYY-MM-DD
+    - 'numeric': 1,000.00
+    """
+    param_type = _get_param_type(param_name)
+
+    if param_type == 'date':
         return str(value)[:10]  # YYYY-MM-DD
-    elif isinstance(value, (int, float)) and abs(value) >= 1e6:
-        return f"${value/1e6:.1f}M"
-    elif isinstance(value, (int, float)) and abs(value) >= 1000:
-        return f"${value/1e3:.0f}K"
-    elif isinstance(value, (int, float)):
-        return f"{value:,.0f}"
-    else:
+    elif param_type == 'currency':
+        if isinstance(value, (int, float)):
+            if abs(value) >= 1e6:
+                return f"${value/1e6:.1f}M"
+            elif abs(value) >= 1000:
+                return f"${value/1e3:.0f}K"
+            return f"${value:,.0f}"
+        return str(value)
+    elif param_type == 'percentage':
+        if isinstance(value, (int, float)):
+            return f"{value:.1%}"
+        return str(value)
+    else:  # 'numeric' or unknown
+        if isinstance(value, (int, float)):
+            if value == int(value):
+                return f"{int(value):,}"
+            return f"{value:,.2f}"
         return str(value)
 
 
@@ -408,7 +484,8 @@ def run_parameter_sweep(
     param_values: list,
     num_simulations: int = None,
     seed: int = 42,
-    verbose: bool = True
+    verbose: bool = True,
+    skip_bootstrap: bool = False
 ) -> pd.DataFrame:
     """
     Run Monte Carlo simulations across parameter values.
@@ -427,6 +504,8 @@ def run_parameter_sweep(
         Random seed for reproducibility
     verbose : bool
         Print progress updates
+    skip_bootstrap : bool
+        If True, skip bootstrap sampling (parametric only)
 
     Returns:
     --------
@@ -437,7 +516,10 @@ def run_parameter_sweep(
 
     # Load historical data once (use first config for data loading)
     base_config = SystemConfig.from_json(config_path)
-    historical_returns, tickers = load_bootstrap_data(base_config)
+    if skip_bootstrap:
+        historical_returns, tickers = None, None
+    else:
+        historical_returns, tickers = load_bootstrap_data(base_config)
     has_bootstrap = historical_returns is not None
     data_source = "yahoo_finance" if has_bootstrap else "parametric_only"
 
@@ -488,6 +570,109 @@ def run_parameter_sweep(
             if has_bootstrap:
                 msg += f", Boot={result['dec_success_boot']:.1%}"
             print(msg)
+
+    return pd.DataFrame(results)
+
+
+def run_parameter_grid_sweep(
+    config_path: str,
+    param1_name: str,
+    param1_values: list,
+    param2_name: str,
+    param2_values: list,
+    num_simulations: int = None,
+    seed: int = 42,
+    verbose: bool = True,
+    skip_bootstrap: bool = False
+) -> pd.DataFrame:
+    """
+    Run Monte Carlo simulations across a 2D grid of parameter values.
+
+    Parameters:
+    -----------
+    config_path : str
+        Path to base JSON config file
+    param1_name : str
+        First parameter to sweep (rows in grid)
+    param1_values : list
+        List of values for first parameter
+    param2_name : str
+        Second parameter to sweep (columns in grid)
+    param2_values : list
+        List of values for second parameter
+    num_simulations : int, optional
+        Number of MC simulations per run
+    seed : int
+        Random seed for reproducibility
+    verbose : bool
+        Print progress updates
+    skip_bootstrap : bool
+        If True, skip bootstrap sampling (parametric only)
+
+    Returns:
+    --------
+    pd.DataFrame with columns for both parameter values and all metrics
+    """
+    results = []
+    total_runs = len(param1_values) * len(param2_values)
+
+    # Load historical data once (use first config for data loading)
+    base_config = SystemConfig.from_json(config_path)
+    if skip_bootstrap:
+        historical_returns, tickers = None, None
+    else:
+        historical_returns, tickers = load_bootstrap_data(base_config)
+    has_bootstrap = historical_returns is not None
+    data_source = "yahoo_finance" if has_bootstrap else "parametric_only"
+
+    run_num = 0
+    for v1 in param1_values:
+        for v2 in param2_values:
+            run_num += 1
+            if verbose:
+                print(f"\n{'='*60}")
+                print(f"[{run_num}/{total_runs}] {param1_name}={_format_param_value(v1, param1_name)}, "
+                      f"{param2_name}={_format_param_value(v2, param2_name)}")
+                print(f"{'='*60}")
+
+            # Load fresh config and modify both parameters
+            config = SystemConfig.from_json(config_path)
+            setattr(config, param1_name, v1)
+            setattr(config, param2_name, v2)
+
+            # Run simulation
+            result = run_mc_simulation(
+                config, historical_returns,
+                num_simulations=num_simulations,
+                seed=seed,
+                verbose=verbose
+            )
+
+            # Flatten results into row
+            row = {
+                param1_name: v1,
+                param2_name: v2,
+                'data_source': data_source
+            }
+
+            for pct in [5, 25, 50, 75, 95]:
+                row[f'acc_p{pct}_param'] = result['acc_percentiles_param'][pct]
+                row[f'dec_p{pct}_param'] = result['dec_percentiles_param'][pct]
+                if has_bootstrap:
+                    row[f'acc_p{pct}_boot'] = result['acc_percentiles_boot'][pct]
+                    row[f'dec_p{pct}_boot'] = result['dec_percentiles_boot'][pct]
+
+            row['dec_success_param'] = result['dec_success_param']
+            if has_bootstrap:
+                row['dec_success_boot'] = result['dec_success_boot']
+
+            results.append(row)
+
+            if verbose:
+                msg = f"  Dec Success: Param={result['dec_success_param']:.1%}"
+                if has_bootstrap:
+                    msg += f", Boot={result['dec_success_boot']:.1%}"
+                print(msg)
 
     return pd.DataFrame(results)
 
@@ -1047,31 +1232,282 @@ def create_sweep_visualization(
     return figures
 
 
+def create_grid_sweep_visualization(
+    df: pd.DataFrame,
+    param1_name: str,
+    param2_name: str,
+    output_path: str = None,
+    has_bootstrap: bool = True,
+    config_info: dict = None
+) -> list:
+    """
+    Create heatmap visualizations for 2D parameter grid sweep results.
+
+    Creates separate figures for parametric and bootstrap showing:
+    - Heatmap of decumulation success rates
+    - Heatmap of median accumulation values
+    - Heatmap of median decumulation values
+
+    Parameters:
+    -----------
+    df : pd.DataFrame
+        Results from run_parameter_grid_sweep()
+    param1_name : str
+        First parameter name (rows)
+    param2_name : str
+        Second parameter name (columns)
+    output_path : str, optional
+        Base path to save figures
+    has_bootstrap : bool
+        Whether bootstrap data is available
+    config_info : dict, optional
+        Configuration parameters to display
+
+    Returns:
+    --------
+    list of plt.Figure
+    """
+    figures = []
+
+    def _create_grid_figure(method: str, color_map: str, output_file: str = None):
+        """Create a grid heatmap figure for one method (param or boot)."""
+        method_label = 'Parametric' if method == 'param' else 'Bootstrap'
+
+        fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+
+        # Get unique values for axes
+        param1_values = sorted(df[param1_name].unique())
+        param2_values = sorted(df[param2_name].unique())
+
+        # Create pivot tables
+        success_pivot = df.pivot(
+            index=param1_name, columns=param2_name,
+            values=f'dec_success_{method}'
+        )
+        acc_pivot = df.pivot(
+            index=param1_name, columns=param2_name,
+            values=f'acc_p50_{method}'
+        )
+        dec_pivot = df.pivot(
+            index=param1_name, columns=param2_name,
+            values=f'dec_p50_{method}'
+        )
+
+        # Format tick labels
+        param1_labels = [_format_param_value(v, param1_name) for v in param1_values]
+        param2_labels = [_format_param_value(v, param2_name) for v in param2_values]
+
+        # Panel 1: Success Rate Heatmap
+        ax = axes[0]
+        im = ax.imshow(success_pivot.values * 100, cmap='RdYlGn', aspect='auto',
+                       vmin=0, vmax=100)
+        ax.set_xticks(range(len(param2_labels)))
+        ax.set_xticklabels(param2_labels, rotation=45, ha='right')
+        ax.set_yticks(range(len(param1_labels)))
+        ax.set_yticklabels(param1_labels)
+        ax.set_xlabel(param2_name.replace('_', ' ').title())
+        ax.set_ylabel(param1_name.replace('_', ' ').title())
+        ax.set_title('Decumulation Success Rate (%)', fontweight='bold')
+
+        # Add text annotations
+        for i in range(len(param1_values)):
+            for j in range(len(param2_values)):
+                val = success_pivot.values[i, j] * 100
+                color = 'white' if val < 50 else 'black'
+                ax.text(j, i, f'{val:.0f}%', ha='center', va='center',
+                        color=color, fontsize=8, fontweight='bold')
+
+        cbar = fig.colorbar(im, ax=ax, shrink=0.8)
+        cbar.set_label('Success Rate (%)')
+
+        # Panel 2: Accumulation Median Heatmap
+        ax = axes[1]
+        im = ax.imshow(acc_pivot.values / 1e6, cmap='Blues', aspect='auto')
+        ax.set_xticks(range(len(param2_labels)))
+        ax.set_xticklabels(param2_labels, rotation=45, ha='right')
+        ax.set_yticks(range(len(param1_labels)))
+        ax.set_yticklabels(param1_labels)
+        ax.set_xlabel(param2_name.replace('_', ' ').title())
+        ax.set_ylabel(param1_name.replace('_', ' ').title())
+        ax.set_title('Accumulation Median ($M)', fontweight='bold')
+
+        # Add text annotations
+        for i in range(len(param1_values)):
+            for j in range(len(param2_values)):
+                val = acc_pivot.values[i, j] / 1e6
+                ax.text(j, i, f'${val:.1f}M', ha='center', va='center',
+                        color='white' if val > acc_pivot.values.mean() / 1e6 else 'black',
+                        fontsize=7)
+
+        cbar = fig.colorbar(im, ax=ax, shrink=0.8)
+        cbar.set_label('Portfolio Value ($M)')
+
+        # Panel 3: Decumulation Median Heatmap
+        ax = axes[2]
+        im = ax.imshow(dec_pivot.values / 1e6, cmap='Purples', aspect='auto')
+        ax.set_xticks(range(len(param2_labels)))
+        ax.set_xticklabels(param2_labels, rotation=45, ha='right')
+        ax.set_yticks(range(len(param1_labels)))
+        ax.set_yticklabels(param1_labels)
+        ax.set_xlabel(param2_name.replace('_', ' ').title())
+        ax.set_ylabel(param1_name.replace('_', ' ').title())
+        ax.set_title('Decumulation Median ($M)', fontweight='bold')
+
+        # Add text annotations
+        for i in range(len(param1_values)):
+            for j in range(len(param2_values)):
+                val = dec_pivot.values[i, j] / 1e6
+                ax.text(j, i, f'${val:.1f}M', ha='center', va='center',
+                        color='white' if val > dec_pivot.values.mean() / 1e6 else 'black',
+                        fontsize=7)
+
+        cbar = fig.colorbar(im, ax=ax, shrink=0.8)
+        cbar.set_label('Portfolio Value ($M)')
+
+        # Add config info at bottom
+        if config_info:
+            config_text = (
+                f"Grid: {param1_name} x {param2_name}  |  "
+                f"Simulations: {config_info.get('num_simulations', 0):,}  |  "
+                f"Seed: {config_info.get('seed', 42)}  |  "
+                f"Data: {config_info.get('data_source', 'N/A')}"
+            )
+            fig.text(0.5, -0.02, config_text, ha='center', va='top', fontsize=8,
+                     fontfamily='monospace',
+                     bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.3))
+
+        plt.suptitle(
+            f'Grid Sweep: {param1_name.replace("_", " ").title()} vs '
+            f'{param2_name.replace("_", " ").title()} ({method_label})',
+            fontsize=14, fontweight='bold', y=1.02
+        )
+        plt.tight_layout()
+
+        if output_file:
+            plt.savefig(output_file, dpi=150, bbox_inches='tight')
+            print(f"  Saved: {output_file}")
+
+        return fig
+
+    # Create parametric figure
+    if output_path:
+        base_path = output_path.replace('.png', '')
+        param_path = f"{base_path}_parametric.png"
+    else:
+        param_path = None
+
+    fig_param = _create_grid_figure('param', 'Blues', param_path)
+    figures.append(fig_param)
+
+    # Create bootstrap figure (if available)
+    if has_bootstrap:
+        if output_path:
+            boot_path = f"{base_path}_bootstrap.png"
+        else:
+            boot_path = None
+
+        fig_boot = _create_grid_figure('boot', 'Purples', boot_path)
+        figures.append(fig_boot)
+
+    return figures
+
+
 # ============================================================================
 # CLI Interface
 # ============================================================================
 
+def _generate_sweep_values(param_name: str, start, end, step) -> list:
+    """
+    Generate sweep values for a parameter using registry type.
+
+    Parameters:
+    -----------
+    param_name : str
+        Parameter name (must be in SWEEP_PARAMS registry)
+    start, end, step : various
+        Range specification (None to use defaults from registry)
+
+    Returns:
+    --------
+    list of parameter values
+    """
+    param_type = _get_param_type(param_name)
+    default_range = _get_default_range(param_name)
+
+    if param_type == 'date':
+        # Date sweep
+        start_date = pd.Timestamp(start) if start else pd.Timestamp(default_range[0])
+        end_date = pd.Timestamp(end) if end else pd.Timestamp(default_range[1])
+        step_str = step if step else default_range[2]
+
+        # Parse step (e.g., "1Y", "6M", "1M")
+        if step_str.endswith('Y'):
+            freq = 'YS'  # Year start
+            multiplier = int(step_str[:-1]) if len(step_str) > 1 else 1
+        elif step_str.endswith('M'):
+            freq = 'MS'  # Month start
+            multiplier = int(step_str[:-1]) if len(step_str) > 1 else 1
+        else:
+            freq = 'YS'
+            multiplier = 1
+
+        all_dates = pd.date_range(start=start_date, end=end_date, freq=freq)
+        if multiplier > 1:
+            all_dates = all_dates[::multiplier]
+        return [d.strftime('%Y-%m-%d') for d in all_dates]
+
+    else:
+        # Numeric sweep (currency, percentage, numeric)
+        if default_range:
+            start_val = float(start) if start is not None else default_range[0]
+            end_val = float(end) if end is not None else default_range[1]
+            step_val = float(step) if step is not None else default_range[2]
+        else:
+            # Fallback for unknown params
+            start_val = float(start) if start is not None else 0
+            end_val = float(end) if end is not None else 100
+            step_val = float(step) if step is not None else 10
+
+        return np.arange(start_val, end_val + step_val / 2, step_val).tolist()
+
+
 def main():
+    # Build list of available sweep params for help text
+    sweep_params_list = ', '.join(SWEEP_PARAMS.keys())
+
     parser = argparse.ArgumentParser(
         description='Monte Carlo Lifecycle Simulator',
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="""
+        epilog=f"""
 Examples:
   # Basic run with Yahoo Finance data
   uv run python src/run_mc.py --config configs/test_simple_buyhold.json
 
-  # Run parameter sweep from config
-  uv run python src/run_mc.py --config configs/test_simple_buyhold.json --sweep
-
-  # Run custom parameter sweep (numeric)
+  # Single parameter sweep (uses default range from registry)
   uv run python src/run_mc.py --config configs/test_simple_buyhold.json \\
-      --sweep --sweep-param initial_portfolio_value \\
-      --sweep-start 500000 --sweep-end 2000000 --sweep-step 500000
+      --sweep --sweep-param inflation_rate
 
-  # Run retirement date sweep (yearly)
+  # Single parameter sweep with custom range
+  uv run python src/run_mc.py --config configs/test_simple_buyhold.json \\
+      --sweep --sweep-param annual_withdrawal_amount \\
+      --sweep-start 30000 --sweep-end 60000 --sweep-step 10000
+
+  # 2D Grid sweep (all combinations of two parameters)
+  uv run python src/run_mc.py --config configs/test_simple_buyhold.json \\
+      --sweep --sweep-param annual_withdrawal_amount \\
+      --sweep-param2 inflation_rate
+
+  # 2D Grid sweep with custom ranges
+  uv run python src/run_mc.py --config configs/test_simple_buyhold.json \\
+      --sweep --sweep-param contribution_amount --sweep-start 0 --sweep-end 2000 --sweep-step 500 \\
+      --sweep-param2 inflation_rate --sweep2-start 0.02 --sweep2-end 0.05 --sweep2-step 0.01
+
+  # Date sweep (retirement date)
   uv run python src/run_mc.py --config configs/test_simple_buyhold.json \\
       --sweep --sweep-param retirement_date \\
-      --sweep-start 2027-01-01 --sweep-end 2039-01-01 --sweep-step 1Y
+      --sweep-start 2030-01-01 --sweep-end 2040-01-01 --sweep-step 2Y
+
+Available sweep parameters: {sweep_params_list}
         """
     )
 
@@ -1085,23 +1521,35 @@ Examples:
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed (default: 42)')
 
-    # Parameter sweep
+    # Parameter sweep (first param)
     parser.add_argument('--sweep', action='store_true',
-                        help='Run parameter sweep from config sweep_params')
+                        help='Run parameter sweep')
     parser.add_argument('--sweep-param', type=str, default=None,
-                        help='Parameter to sweep (overrides config). Supports numeric params and date params like retirement_date')
+                        help=f'First parameter to sweep. Available: {sweep_params_list}')
     parser.add_argument('--sweep-start', type=str, default=None,
-                        help='Sweep start value (number or date like 2027-01-01)')
+                        help='First param start value (uses registry default if omitted)')
     parser.add_argument('--sweep-end', type=str, default=None,
-                        help='Sweep end value (number or date like 2039-01-01)')
+                        help='First param end value (uses registry default if omitted)')
     parser.add_argument('--sweep-step', type=str, default=None,
-                        help='Sweep step size (number or "1Y" for yearly, "1M" for monthly)')
+                        help='First param step size (number, "1Y", or "1M")')
+
+    # Second parameter (for 2D grid sweep)
+    parser.add_argument('--sweep-param2', type=str, default=None,
+                        help='Second parameter for 2D grid sweep')
+    parser.add_argument('--sweep2-start', type=str, default=None,
+                        help='Second param start value')
+    parser.add_argument('--sweep2-end', type=str, default=None,
+                        help='Second param end value')
+    parser.add_argument('--sweep2-step', type=str, default=None,
+                        help='Second param step size')
 
     # Output
     parser.add_argument('--output', '-o', type=str, default=None,
                         help='Output directory (default: output/mc)')
     parser.add_argument('--no-plot', action='store_true',
                         help='Skip generating visualization')
+    parser.add_argument('--no-bootstrap', action='store_true',
+                        help='Run parametric only, skip bootstrap sampling')
 
     args = parser.parse_args()
 
@@ -1125,198 +1573,211 @@ Examples:
     # Determine mode
     if args.sweep:
         # Parameter sweep mode
-        print("\n[MODE] Parameter Sweep")
+        is_grid_sweep = args.sweep_param2 is not None
 
-        # Get sweep parameters
+        if is_grid_sweep:
+            print("\n[MODE] 2D Grid Parameter Sweep")
+        else:
+            print("\n[MODE] Single Parameter Sweep")
+
+        # Get first parameter
         if args.sweep_param:
-            # Use CLI arguments
-            param_name = args.sweep_param
-
-            # Check if this is a date parameter
-            if _is_date_param(param_name):
-                # Date sweep
-                start_date = pd.Timestamp(args.sweep_start or '2027-01-01')
-                end_date = pd.Timestamp(args.sweep_end or '2039-01-01')
-                step = args.sweep_step or '1Y'
-
-                # Parse step (e.g., "1Y", "6M", "1M")
-                if step.endswith('Y'):
-                    freq = 'YS'  # Year start
-                    multiplier = int(step[:-1]) if len(step) > 1 else 1
-                elif step.endswith('M'):
-                    freq = 'MS'  # Month start
-                    multiplier = int(step[:-1]) if len(step) > 1 else 1
-                else:
-                    freq = 'YS'
-                    multiplier = 1
-
-                # Generate date range
-                all_dates = pd.date_range(start=start_date, end=end_date, freq=freq)
-                if multiplier > 1:
-                    all_dates = all_dates[::multiplier]
-                param_values = [d.strftime('%Y-%m-%d') for d in all_dates]
-            else:
-                # Numeric sweep
-                start = float(args.sweep_start) if args.sweep_start else 500000
-                end = float(args.sweep_end) if args.sweep_end else 2000000
-                step = float(args.sweep_step) if args.sweep_step else 500000
-                param_values = np.arange(start, end + step / 2, step).tolist()
-
+            param1_name = args.sweep_param
+            # Warn if unknown param (but still allow it)
+            if param1_name not in SWEEP_PARAMS:
+                print(f"  Warning: '{param1_name}' not in registry, using defaults")
+            param1_values = _generate_sweep_values(
+                param1_name, args.sweep_start, args.sweep_end, args.sweep_step
+            )
         elif hasattr(config, 'sweep_params') and config.sweep_params:
             # Use config sweep_params (first one)
             sweep_config = config.sweep_params[0]
-            param_name = sweep_config['name']
-            param_values = np.arange(
+            param1_name = sweep_config['name']
+            param1_values = np.arange(
                 sweep_config['start'],
                 sweep_config['end'] + sweep_config['step'] / 2,
                 sweep_config['step']
             ).tolist()
         else:
             # Default sweep
-            param_name = 'initial_portfolio_value'
-            param_values = [500000, 1000000, 1500000, 2000000]
+            param1_name = 'initial_portfolio_value'
+            param1_values = _generate_sweep_values(param1_name, None, None, None)
 
-        # Format display of values
-        first_val = _format_param_value(param_values[0], param_name)
-        last_val = _format_param_value(param_values[-1], param_name)
-        print(f"  Parameter: {param_name}")
-        print(f"  Values: {len(param_values)} ({first_val} to {last_val})")
+        # Get second parameter (for grid sweep)
+        if is_grid_sweep:
+            param2_name = args.sweep_param2
+            if param2_name not in SWEEP_PARAMS:
+                print(f"  Warning: '{param2_name}' not in registry, using defaults")
+            param2_values = _generate_sweep_values(
+                param2_name, args.sweep2_start, args.sweep2_end, args.sweep2_step
+            )
+
+        # Display sweep info
+        first_val1 = _format_param_value(param1_values[0], param1_name)
+        last_val1 = _format_param_value(param1_values[-1], param1_name)
+        print(f"  Parameter 1: {param1_name}")
+        print(f"    Values: {len(param1_values)} ({first_val1} to {last_val1})")
+
+        if is_grid_sweep:
+            first_val2 = _format_param_value(param2_values[0], param2_name)
+            last_val2 = _format_param_value(param2_values[-1], param2_name)
+            print(f"  Parameter 2: {param2_name}")
+            print(f"    Values: {len(param2_values)} ({first_val2} to {last_val2})")
+            print(f"  Total runs: {len(param1_values) * len(param2_values)}")
 
         # Run sweep
-        df = run_parameter_sweep(
-            config_path=args.config,
-            param_name=param_name,
-            param_values=param_values,
-            num_simulations=args.sims,
-            seed=args.seed,
-            verbose=True
-        )
-
-        # Save results
         sweep_dir = output_dir / 'sweep'
         sweep_dir.mkdir(parents=True, exist_ok=True)
-        csv_path = sweep_dir / f'{param_name}_sweep.csv'
+
+        if is_grid_sweep:
+            # 2D Grid sweep
+            df = run_parameter_grid_sweep(
+                config_path=args.config,
+                param1_name=param1_name,
+                param1_values=param1_values,
+                param2_name=param2_name,
+                param2_values=param2_values,
+                num_simulations=args.sims,
+                seed=args.seed,
+                verbose=True,
+                skip_bootstrap=args.no_bootstrap
+            )
+            csv_path = sweep_dir / f'{param1_name}_{param2_name}_grid.csv'
+        else:
+            # Single param sweep
+            df = run_parameter_sweep(
+                config_path=args.config,
+                param_name=param1_name,
+                param_values=param1_values,
+                num_simulations=args.sims,
+                seed=args.seed,
+                verbose=True,
+                skip_bootstrap=args.no_bootstrap
+            )
+            csv_path = sweep_dir / f'{param1_name}_sweep.csv'
+
         df.to_csv(csv_path, index=False)
         print(f"\nResults saved to: {csv_path}")
 
         # Check if bootstrap columns exist in results
         has_bootstrap = 'acc_p50_boot' in df.columns
 
-        # Print summary (transposed for readability)
+        # Print summary
         print("\n" + "=" * 80)
-        print("PARAMETER SWEEP RESULTS")
+        if is_grid_sweep:
+            print("GRID SWEEP RESULTS")
+        else:
+            print("PARAMETER SWEEP RESULTS")
         print("=" * 80)
 
         # Print config context
-        # Calculate decumulation end date
         retirement_dt = pd.Timestamp(config.retirement_date)
         dec_end_date = retirement_dt + pd.DateOffset(years=int(config.get_decumulation_years()))
-        dec_end_str = dec_end_date.strftime('%b %Y')  # e.g., "Jan 2054"
+        dec_end_str = dec_end_date.strftime('%b %Y')
 
         print("\nConfiguration:")
         print(f"  Ticker file:        {config.ticker_file}")
-        print(f"  Mean returns file:  {config.simulated_mean_returns_file}")
-        print(f"  Cov matrices file:  {config.simulated_cov_matrices_file}")
         print(f"  Initial value:      ${config.initial_portfolio_value:,.0f}")
         print(f"  Retirement date:    {config.retirement_date}")
         print(f"  Decumulation end:   {dec_end_str}")
-        print(f"  Simulation freq:    {config.simulation_frequency}")
         print(f"  Contribution:       ${config.contribution_amount:,.0f} ({config.contribution_frequency})")
-        print(f"  Employer match:     {config.employer_match_rate:.1%}")
         print(f"  Annual withdrawal:  ${config.annual_withdrawal_amount:,.0f} ({config.withdrawal_frequency})")
         print(f"  Inflation rate:     {config.inflation_rate:.1%}")
         print(f"  MC simulations:     {args.sims or config.num_mc_simulations:,}")
-        print(f"  Random seed:        {args.seed}")
         print(f"  Data source:        {'Yahoo Finance + Parametric' if has_bootstrap else 'Parametric only'}")
-        print(f"\nSweep Parameter: {param_name.replace('_', ' ').title()}")
 
-        # Format parameter values as column headers
-        is_date = _is_date_param(param_name)
-        param_headers = []
-        for val in df[param_name].values:
-            param_headers.append(_format_param_value(val, param_name))
+        if is_grid_sweep:
+            # Grid sweep summary - show success rate matrix
+            print(f"\nGrid: {param1_name} x {param2_name}")
+            print("\nSuccess Rate (Parametric):")
 
-        # Print transposed table with metrics as rows
-        col_width = 14 if not is_date else 12
-        param_label = param_name.replace('_', ' ').title()
-        header_row = f"{'Metric':<25}" + "".join(f"{h:>{col_width}}" for h in param_headers)
-        print(f"\n{param_label + ':':<25}" + "".join(f"{h:>{col_width}}" for h in param_headers))
-        print("-" * len(header_row))
+            # Create pivot table for display
+            success_pivot = df.pivot(
+                index=param1_name, columns=param2_name, values='dec_success_param'
+            )
 
-        # Accumulation metrics
-        print("\nAccumulation (at retirement):")
-        for pct in [5, 25, 50, 75, 95]:
-            row = f"  P{pct} Parametric"
-            row = f"{row:<25}"
+            # Print header row
+            header = f"{'':>12}"
+            for v2 in sorted(df[param2_name].unique()):
+                header += f"{_format_param_value(v2, param2_name):>10}"
+            print(header)
+
+            # Print data rows
+            for v1 in sorted(df[param1_name].unique()):
+                row = f"{_format_param_value(v1, param1_name):>12}"
+                for v2 in sorted(df[param2_name].unique()):
+                    val = success_pivot.loc[v1, v2] * 100
+                    row += f"{val:>9.0f}%"
+                print(row)
+
+        else:
+            # Single param sweep summary
+            print(f"\nSweep Parameter: {param1_name.replace('_', ' ').title()}")
+
+            is_date = _is_date_param(param1_name)
+            param_headers = [_format_param_value(val, param1_name) for val in df[param1_name].values]
+            col_width = 14 if not is_date else 12
+
+            # Print header
+            param_label = param1_name.replace('_', ' ').title()
+            print(f"\n{param_label + ':':<25}" + "".join(f"{h:>{col_width}}" for h in param_headers))
+            print("-" * (25 + col_width * len(param_headers)))
+
+            # Success rates
+            print("\nSuccess Rate:")
+            row = f"{'  Parametric':<25}"
             for _, r in df.iterrows():
-                val = r[f'acc_p{pct}_param']
+                row += f"{r['dec_success_param']*100:>{col_width}.1f}%"
+            print(row)
+
+            if has_bootstrap:
+                row = f"{'  Bootstrap':<25}"
+                for _, r in df.iterrows():
+                    row += f"{r['dec_success_boot']*100:>{col_width}.1f}%"
+                print(row)
+
+            # Accumulation median
+            print("\nAccumulation Median:")
+            row = f"{'  Parametric':<25}"
+            for _, r in df.iterrows():
+                val = r['acc_p50_param']
                 row += f"${val/1e6:>{col_width-1}.2f}M"
             print(row)
 
-        if has_bootstrap:
-            for pct in [5, 25, 50, 75, 95]:
-                row = f"  P{pct} Bootstrap"
-                row = f"{row:<25}"
-                for _, r in df.iterrows():
-                    val = r[f'acc_p{pct}_boot']
-                    row += f"${val/1e6:>{col_width-1}.2f}M"
-                print(row)
-
-        # Decumulation metrics
-        print("\nDecumulation (final):")
-        for pct in [5, 25, 50, 75, 95]:
-            row = f"  P{pct} Parametric"
-            row = f"{row:<25}"
-            for _, r in df.iterrows():
-                val = r[f'dec_p{pct}_param']
-                row += f"${val/1e6:>{col_width-1}.2f}M"
-            print(row)
-
-        if has_bootstrap:
-            for pct in [5, 25, 50, 75, 95]:
-                row = f"  P{pct} Bootstrap"
-                row = f"{row:<25}"
-                for _, r in df.iterrows():
-                    val = r[f'dec_p{pct}_boot']
-                    row += f"${val/1e6:>{col_width-1}.2f}M"
-                print(row)
-
-        # Success rates
-        print("\nSuccess Rate:")
-        row = f"{'  Parametric':<25}"
-        for _, r in df.iterrows():
-            row += f"{r['dec_success_param']*100:>{col_width}.1f}%"
-        print(row)
-
-        if has_bootstrap:
-            row = f"{'  Bootstrap':<25}"
-            for _, r in df.iterrows():
-                row += f"{r['dec_success_boot']*100:>{col_width}.1f}%"
-            print(row)
-
-        # Create visualization (separate files for parametric and bootstrap)
+        # Create visualization
         if not args.no_plot:
-            # Build config info dict for visualization
             config_info = {
-                'sweep_param': param_name.replace('_', ' ').title(),
-                'ticker_file': config.ticker_file,
-                'mean_returns_file': config.simulated_mean_returns_file,
-                'cov_matrices_file': config.simulated_cov_matrices_file,
-                'initial_value': config.initial_portfolio_value,
-                'retirement_date': config.retirement_date,
-                'dec_end_date': dec_end_str,
-                'simulation_frequency': config.simulation_frequency,
-                'contribution_amount': config.contribution_amount,
-                'contribution_frequency': config.contribution_frequency,
-                'employer_match_rate': config.employer_match_rate,
-                'annual_withdrawal': config.annual_withdrawal_amount,
-                'inflation_rate': config.inflation_rate,
                 'num_simulations': args.sims or config.num_mc_simulations,
                 'seed': args.seed,
                 'data_source': 'Yahoo Finance + Parametric' if has_bootstrap else 'Parametric only',
             }
-            plot_path = sweep_dir / f'{param_name}_sweep.png'
-            figures = create_sweep_visualization(df, param_name, str(plot_path), has_bootstrap, config_info)
+
+            if is_grid_sweep:
+                plot_path = sweep_dir / f'{param1_name}_{param2_name}_grid.png'
+                figures = create_grid_sweep_visualization(
+                    df, param1_name, param2_name, str(plot_path), has_bootstrap, config_info
+                )
+            else:
+                config_info.update({
+                    'sweep_param': param1_name.replace('_', ' ').title(),
+                    'ticker_file': config.ticker_file,
+                    'mean_returns_file': config.simulated_mean_returns_file,
+                    'cov_matrices_file': config.simulated_cov_matrices_file,
+                    'initial_value': config.initial_portfolio_value,
+                    'retirement_date': config.retirement_date,
+                    'dec_end_date': dec_end_str,
+                    'simulation_frequency': config.simulation_frequency,
+                    'contribution_amount': config.contribution_amount,
+                    'contribution_frequency': config.contribution_frequency,
+                    'employer_match_rate': config.employer_match_rate,
+                    'annual_withdrawal': config.annual_withdrawal_amount,
+                    'inflation_rate': config.inflation_rate,
+                })
+                plot_path = sweep_dir / f'{param1_name}_sweep.png'
+                figures = create_sweep_visualization(
+                    df, param1_name, str(plot_path), has_bootstrap, config_info
+                )
+
             for fig in figures:
                 plt.close(fig)
 
@@ -1326,7 +1787,11 @@ Examples:
 
         # Load historical data
         print("\n[1/3] Loading historical data...")
-        historical_returns, tickers = load_bootstrap_data(config)
+        if args.no_bootstrap:
+            print("  Skipping bootstrap (--no-bootstrap flag)")
+            historical_returns, tickers = None, None
+        else:
+            historical_returns, tickers = load_bootstrap_data(config)
         has_bootstrap = historical_returns is not None
         data_source = "yahoo_finance" if has_bootstrap else "parametric_only"
 

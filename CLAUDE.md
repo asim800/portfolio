@@ -12,8 +12,10 @@ A **portfolio lifecycle simulation system** for retirement planning that answers
 | Script | Purpose |
 |--------|---------|
 | `uv run python src/run_mc.py --config configs/test_simple_buyhold.json` | **Production MC simulator** - parametric + bootstrap sampling |
-| `uv run python src/test_mc_validation.py` | Validation with known parameters |
+| `uv run python src/run_mc.py --config configs/test_simple_buyhold.json --sweep` | **Parameter sweep mode** |
+| `uv run python tests/test_mc_validation.py` | Validation with known parameters |
 | `uv run python src/main.py` | Legacy backtesting system |
+| `uv run python examples/strategy_comparison.py` | Universal portfolio comparison |
 
 ### Quick Start
 
@@ -33,41 +35,102 @@ uv run python src/run_mc.py --config configs/test_simple_buyhold.json
 
 ```
 port/
-├── src/
-│   ├── run_mc.py                 # Production MC simulator (parametric + bootstrap)
-│   ├── test_mc_validation.py     # Validation script with known parameters
-│   ├── main.py                   # Legacy backtesting entry point
+├── src/                              # Source code (modularized packages)
+│   ├── run_mc.py                     # Production MC simulator
+│   ├── main.py                       # Legacy backtesting entry point
 │   │
-│   ├── montecarlo/               # Monte Carlo simulation
-│   │   ├── __init__.py          # Exports MCPathGenerator
-│   │   ├── path_generator.py    # MCPathGenerator - generates asset return paths
-│   │   ├── lifecycle.py         # run_accumulation_mc(), run_decumulation_mc()
-│   │   └── bootstrap.py         # Bootstrap sampling functions
+│   ├── montecarlo/                   # Monte Carlo simulation
+│   │   ├── __init__.py               # Exports MCPathGenerator
+│   │   ├── path_generator.py         # MCPathGenerator - generates asset return paths
+│   │   ├── lifecycle.py              # run_accumulation_mc(), run_decumulation_mc()
+│   │   └── bootstrap.py              # Bootstrap sampling functions
 │   │
-│   ├── config/                   # Configuration
-│   │   ├── system_config.py     # SystemConfig dataclass (dates, contributions, withdrawals)
-│   │   └── rebalancing_config.py
+│   ├── config/                       # Configuration handling
+│   │   ├── system_config.py          # SystemConfig dataclass
+│   │   └── rebalancing_config.py     # RebalancingConfig
 │   │
-│   ├── data/                     # Data loading
-│   │   ├── market_data.py       # load_returns_data(), fetch_yahoo_finance_data()
-│   │   └── covariance.py
+│   ├── data/                         # Data loading and processing
+│   │   ├── market_data.py            # FinData, load_returns_data(), Yahoo Finance
+│   │   ├── covariance.py             # CovarianceEstimator
+│   │   └── simulated.py              # Simulated test data parameters
 │   │
-│   ├── simulated_data_params.py  # Known test parameters (mean returns, covariance)
-│   ├── mc_path_generator.py      # Legacy path generator (use montecarlo/ instead)
-│   ├── fin_data.py               # FinData class for Yahoo Finance with caching
-│   └── system_config.py          # Legacy config (use config/ instead)
+│   ├── engine/                       # Core portfolio management
+│   │   ├── portfolio.py              # Portfolio class
+│   │   ├── optimizer.py              # PortfolioOptimizer (mean-variance, robust)
+│   │   ├── backtest.py               # PerformanceEngine
+│   │   └── period_manager.py         # PeriodManager
+│   │
+│   ├── metrics/                      # Performance and risk metrics
+│   │   ├── performance.py            # Sharpe, Sortino, Calmar, etc.
+│   │   ├── risk.py                   # VaR, CVaR, tail risk
+│   │   └── tracker.py                # PortfolioTracker
+│   │
+│   ├── strategies/                   # Portfolio strategies
+│   │   ├── base.py                   # Abstract base classes
+│   │   ├── allocation.py             # StaticAllocation, EqualWeight, Optimized
+│   │   ├── rebalancing.py            # Never, Periodic, Threshold triggers
+│   │   ├── registry.py               # Strategy registry pattern
+│   │   └── universal.py              # 17 Universal Portfolio implementations
+│   │
+│   ├── visualization/                # Plotting and charts
+│   │   ├── base.py                   # Common utilities
+│   │   ├── backtest.py               # RebalancingVisualizer
+│   │   ├── comparison.py             # Strategy comparison grids
+│   │   ├── montecarlo.py             # Fan charts, lifecycle viz
+│   │   └── heatmaps.py               # Covariance heatmaps
+│   │
+│   └── [legacy files]                # Deprecated - use modularized packages instead
+│       ├── system_config.py          # → use config/system_config.py
+│       ├── mc_path_generator.py      # → use montecarlo/path_generator.py
+│       ├── fin_data.py               # → use data/market_data.py
+│       └── ...                       # Other legacy files awaiting cleanup
 │
-├── configs/
-│   ├── test_simple_buyhold.json  # Example configuration
-│   └── data/
-│       ├── simulated_mean_returns.csv
-│       └── simulated_cov_matrices.txt
+├── configs/                          # Configuration files
+│   ├── test_simple_buyhold.json      # MC simulation config
+│   ├── system_config_with_retirement.json
+│   ├── README.md                     # Config system documentation
+│   ├── data/                         # Simulated test parameters
+│   │   ├── simulated_mean_returns.csv
+│   │   └── simulated_cov_matrices.txt
+│   ├── portfolios/                   # Individual portfolio strategy configs
+│   │   ├── buy_and_hold_baseline.json
+│   │   ├── conservative_60_40.json
+│   │   ├── optimized_mean_variance.json
+│   │   └── ...
+│   ├── comparisons/                  # Multi-strategy comparison configs
+│   │   ├── active_vs_passive.json
+│   │   └── conservative_strategies.json
+│   └── system/                       # System-level configs
+│       └── system_config.json
 │
-├── tickers.txt                   # Ticker symbols and weights
-├── output/                       # Generated outputs
-│   ├── mc/                       # MC simulation results
-│   └── cache/                    # Data cache files
-└── tests/                        # Test files
+├── tests/                            # Test files
+│   ├── test_mc_validation.py         # Monte Carlo validation
+│   ├── test_mc_bootstrap.py          # Bootstrap validation
+│   ├── test_mc_parameter_sweep.py    # Parameter sweep tests
+│   ├── test_mc_portfolio_integration.py
+│   ├── test_new_architecture.py
+│   └── generate_simulated_params.py  # Utility to generate test data
+│
+├── examples/                         # Example scripts
+│   ├── example_simple_mc_portfolio.py
+│   └── strategy_comparison.py        # 17 Universal Portfolio comparison
+│
+├── docs/                             # Documentation
+│   ├── RUN_MC_GUIDE.md               # MC simulator guide
+│   ├── REFACTORING_SUMMARY.md        # Architecture changes
+│   ├── TIME_VARYING_PARAMS_GUIDE.md
+│   ├── RETIREMENT_README.md
+│   └── ...                           # Other documentation
+│
+├── output/                           # Generated outputs
+│   ├── cache/                        # Market data cache (CSV, PKL)
+│   ├── mc/                           # MC simulation results
+│   │   └── sweep/                    # Parameter sweep results
+│   ├── plots/                        # Visualization outputs
+│   └── results/                      # Backtest results
+│
+├── tickers.txt                       # Current ticker file (SPY, AGG, NVDA, GLD)
+└── tickers_bhaijan.txt               # Alternative ticker file
 ```
 
 ---
@@ -98,7 +161,11 @@ Timeline: `[start_date --- historical data --- end_date] → [mc_start_date --- 
 
 ---
 
-## Configuration (configs/test_simple_buyhold.json)
+## Configuration
+
+### MC Simulation Config (configs/test_simple_buyhold.json)
+
+Used by `run_mc.py` for lifecycle simulations:
 
 ```json
 {
@@ -126,6 +193,16 @@ Timeline: `[start_date --- historical data --- end_date] → [mc_start_date --- 
   "simulated_cov_matrices_file": "configs/data/simulated_cov_matrices.txt"
 }
 ```
+
+### Backtesting Config System (Three-Tier)
+
+Used by `main.py` for portfolio strategy comparison:
+
+1. **System Config** (`configs/system/system_config.json`) - Global settings
+2. **Portfolio Configs** (`configs/portfolios/*.json`) - Individual strategies
+3. **Comparison Configs** (`configs/comparisons/*.json`) - Multi-strategy experiments
+
+See `configs/README.md` for details.
 
 ---
 
@@ -190,19 +267,19 @@ dec_values, success = run_decumulation_mc(
 
 ### 1. Covariance Scales Linearly (NOT sqrt)
 ```python
-# ❌ WRONG
+# WRONG
 period_cov = annual_cov / np.sqrt(periods_per_year)
 
-# ✅ CORRECT
+# CORRECT
 period_cov = annual_cov / periods_per_year
 ```
 
 ### 2. Compound Returns (NOT sum)
 ```python
-# ❌ WRONG
+# WRONG
 annual_return = np.sum(weekly_returns)
 
-# ✅ CORRECT
+# CORRECT
 annual_return = np.prod(1 + weekly_returns) - 1
 ```
 
@@ -268,6 +345,7 @@ run_mc.py
 3. **Vectorized Operations**: Use numpy broadcasting for performance
 4. **Extensive Comments**: Explain "why", not just "what"
 5. **Don't remove `import ipdb`**: User needs it for debugging
+6. **Use Modularized Packages**: Prefer `src/config/`, `src/data/`, etc. over legacy root-level files
 
 ---
 
@@ -281,5 +359,27 @@ run_mc.py
 | Configuration loading | `src/config/system_config.py` |
 | Production simulator | `src/run_mc.py` |
 | Market data loading | `src/data/market_data.py` |
-| Test parameters | `src/simulated_data_params.py` |
-| Validation script | `src/test_mc_validation.py` |
+| Portfolio strategies | `src/strategies/allocation.py`, `src/strategies/universal.py` |
+| Rebalancing triggers | `src/strategies/rebalancing.py` |
+| Performance metrics | `src/metrics/performance.py`, `src/metrics/risk.py` |
+| Visualization | `src/visualization/montecarlo.py`, `src/visualization/backtest.py` |
+| MC validation tests | `tests/test_mc_validation.py` |
+| Bootstrap tests | `tests/test_mc_bootstrap.py` |
+
+---
+
+## Architecture Notes
+
+The codebase has been refactored from a monolithic structure to modular packages:
+
+| Package | Purpose |
+|---------|---------|
+| `src/config/` | Configuration dataclasses and loading |
+| `src/data/` | Market data fetching, caching, covariance estimation |
+| `src/engine/` | Portfolio management, optimization, backtesting |
+| `src/metrics/` | Performance and risk calculations |
+| `src/montecarlo/` | MC path generation, lifecycle simulation, bootstrap |
+| `src/strategies/` | Allocation and rebalancing strategies, universal portfolios |
+| `src/visualization/` | Plotting utilities for all visualization needs |
+
+**Note**: Legacy files remain in `src/` root for backward compatibility but should not be used for new development. Use the modularized packages instead.
