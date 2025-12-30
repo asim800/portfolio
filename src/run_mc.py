@@ -35,7 +35,6 @@ from src.config import SystemConfig
 from src.montecarlo import MCPathGenerator
 from src.montecarlo.lifecycle import run_accumulation_mc, run_decumulation_mc
 from src.data.market_data import load_returns_data
-from src import simulated_data_params as sim_params
 
 import ipdb
 
@@ -48,15 +47,16 @@ def _get_tickers_from_config(config: SystemConfig) -> list:
     Get ticker list from config file.
 
     Reads ticker_file from config and extracts Symbol column.
+
+    Raises:
+        FileNotFoundError: If ticker file doesn't exist
     """
     ticker_file = config.ticker_file
     if not os.path.isabs(ticker_file):
         ticker_file = os.path.join(PROJECT_ROOT, ticker_file)
 
     if not os.path.exists(ticker_file):
-        # Fallback to sim_params tickers
-        print(f"  Warning: Ticker file not found ({ticker_file}), using sim_params.tickers")
-        return sim_params.tickers
+        raise FileNotFoundError(f"Ticker file not found: {ticker_file}")
 
     tickers_df = pd.read_csv(ticker_file, skipinitialspace=True)
     tickers_df.columns = tickers_df.columns.str.strip()
@@ -501,8 +501,9 @@ def create_single_run_visualization(
     plt.Figure
     """
     import matplotlib.dates as mdates
+    from matplotlib.lines import Line2D
 
-    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+    fig, axes = plt.subplots(2, 3, figsize=(18, 10))
 
     acc_values_param = result['acc_values_param']
     acc_values_boot = result['acc_values_boot']
@@ -528,28 +529,101 @@ def create_single_run_visualization(
 
     # Panel 2: Accumulation - Bootstrap
     ax = axes[0, 1]
-    for i in range(num_paths):
-        ax.plot(acc_values_boot[i, :], alpha=0.3, linewidth=0.8, color=boot_color)
-    ax.set_title(f'Accumulation (Bootstrap - {data_source})', fontsize=12, fontweight='bold')
+    if acc_values_boot is not None:
+        for i in range(num_paths):
+            ax.plot(acc_values_boot[i, :], alpha=0.3, linewidth=0.8, color=boot_color)
+        ax.set_title(f'Accumulation (Bootstrap - {data_source})', fontsize=12, fontweight='bold')
+    else:
+        ax.text(0.5, 0.5, 'No Bootstrap Data', ha='center', va='center', fontsize=14, transform=ax.transAxes)
+        ax.set_title('Accumulation (Bootstrap - N/A)', fontsize=12, fontweight='bold')
     ax.set_xlabel('Period', fontsize=10)
     ax.set_ylabel('Portfolio Value ($)', fontsize=10)
     ax.grid(True, alpha=0.3)
     ax.yaxis.set_major_formatter(plt.FuncFormatter(
         lambda x, p: f'${x/1e6:.1f}M' if x >= 1e6 else f'${x/1e3:.0f}K'))
 
-    # Panel 3: Final accumulation distribution comparison
+    # Panel 3: Time-varying mean returns (from test_mc_validation.py)
+    ax = axes[0, 2]
+
+    # Load time-varying parameters for visualization
+    mean_file = config.simulated_mean_returns_file
+    if not os.path.isabs(mean_file):
+        mean_file = os.path.join(PROJECT_ROOT, mean_file)
+    mean_returns_df = pd.read_csv(mean_file, index_col=0)
+
+    # Get contribution frequency for date generation
+    contribution_freq = config.get_contribution_pandas_frequency()
+    mc_start_date = pd.Timestamp(SystemConfig.align_date_to_frequency(
+        config.get_mc_start_date(),
+        contribution_freq
+    ))
+    retirement_date_config = pd.Timestamp(SystemConfig.align_date_to_frequency(
+        config.retirement_date,
+        contribution_freq
+    ))
+
+    # Create regime dates and time-varying DataFrame
+    regime_dates = [mc_start_date, retirement_date_config]
+    tickers_list = mean_returns_df.columns.tolist()
+    mean_ts = pd.DataFrame(
+        mean_returns_df.values,
+        index=pd.DatetimeIndex(regime_dates),
+        columns=tickers_list
+    )
+
+    # Create full date range for visualization
+    acc_years = int(config.get_accumulation_years())
+    dec_years = int(config.get_decumulation_years())
+    periods_per_year = config.frequency_to_periods_per_year(config.simulation_frequency)
+    total_periods = (acc_years + dec_years) * periods_per_year
+    dates = pd.date_range(start=mc_start_date, periods=total_periods + 1, freq=contribution_freq)
+
+    # Reindex mean_ts to full date range for visualization
+    mean_ts_full = mean_ts.reindex(dates, method='ffill')
+
+    # Plot each ticker's time-varying mean return
+    for ticker in tickers_list:
+        ax.plot(mean_ts_full.index, mean_ts_full[ticker], label=ticker, linewidth=2, alpha=0.8)
+
+    # Mark the regime shift points
+    for shift_date in mean_ts.index:
+        ax.axvline(shift_date, color='gray', linestyle=':', linewidth=1, alpha=0.4)
+
+    # Highlight retirement date
+    ax.axvline(retirement_date_config, color='red', linestyle='--',
+               linewidth=2, label='Retirement', alpha=0.6)
+
+    # Add shaded regions for accumulation vs decumulation
+    ax.axvspan(dates[0], retirement_date_config, alpha=0.05, color='green')
+    ax.axvspan(retirement_date_config, dates[-1], alpha=0.05, color='red')
+
+    ax.set_title('Time-Varying Mean Returns (Annual)', fontsize=12, fontweight='bold')
+    ax.set_xlabel('Date', fontsize=10)
+    ax.set_ylabel('Expected Return', fontsize=10)
+    ax.legend(fontsize=7, loc='best')
+    ax.grid(True, alpha=0.3)
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'{x:.1%}'))
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    ax.xaxis.set_major_locator(mdates.YearLocator(5))  # Show every 5 years
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    # Panel 4: Final accumulation distribution comparison
     ax = axes[1, 0]
     final_param = acc_values_param[:, -1]
-    final_boot = acc_values_boot[:, -1]
 
     ax.hist(final_param, bins=30, alpha=0.5, label='Parametric', color=param_color, density=True)
-    ax.hist(final_boot, bins=30, alpha=0.5, label='Bootstrap', color=boot_color, density=True)
+    if acc_values_boot is not None:
+        final_boot = acc_values_boot[:, -1]
+        ax.hist(final_boot, bins=30, alpha=0.5, label='Bootstrap', color=boot_color, density=True)
 
     # Add percentile lines
-    for data, color, name in [(final_param, param_color, 'Param'), (final_boot, boot_color, 'Boot')]:
-        p50 = np.percentile(data, 50)
-        ax.axvline(p50, color=color, linestyle='--', linewidth=2,
-                   label=f'{name} Median: ${p50/1e6:.2f}M')
+    p50_param = np.percentile(final_param, 50)
+    ax.axvline(p50_param, color=param_color, linestyle='--', linewidth=2,
+               label=f'Param Median: ${p50_param/1e6:.2f}M')
+    if acc_values_boot is not None:
+        p50_boot = np.percentile(final_boot, 50)
+        ax.axvline(p50_boot, color=boot_color, linestyle='--', linewidth=2,
+                   label=f'Boot Median: ${p50_boot/1e6:.2f}M')
 
     ax.set_title('Final Accumulation Distribution', fontsize=12, fontweight='bold')
     ax.set_xlabel('Final Value ($)', fontsize=10)
@@ -558,23 +632,16 @@ def create_single_run_visualization(
     ax.grid(True, alpha=0.3)
     ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, p: f'${x/1e6:.1f}M'))
 
-    # Panel 4: Complete lifecycle spaghetti plot (accumulation → decumulation)
-    ax = axes[1, 1]
+    # -------------------------------------------------------------------------
+    # Shared setup for lifecycle plots (Panels 5 and 6)
+    # -------------------------------------------------------------------------
     num_spaghetti = min(50, acc_values_param.shape[0])
 
     # Get actual periods from value arrays (authoritative source)
     acc_periods = acc_values_param.shape[1]
     dec_periods = dec_values_param.shape[1]
 
-    # Get contribution frequency for date generation
-    contribution_freq = config.get_contribution_pandas_frequency()
-
-    # Create dates for visualization based on actual array dimensions
-    mc_start_date = SystemConfig.align_date_to_frequency(
-        config.get_mc_start_date(),
-        contribution_freq
-    )
-
+    # Get contribution frequency for date generation (reuse from Panel 3)
     # Generate accumulation dates (starting from mc_start_date)
     acc_dates = pd.date_range(start=mc_start_date, periods=acc_periods, freq=contribution_freq)
     retirement_date = acc_dates[-1]
@@ -583,53 +650,45 @@ def create_single_run_visualization(
     dec_dates = pd.date_range(start=retirement_date, periods=dec_periods, freq=contribution_freq)
 
     # Colors by phase (green=accumulation, red=decumulation)
-    # acc_color = 'green'
-    # dec_color = 'red'
-    # boot_acc_color = 'blue'      # Distinct color for bootstrap accumulation
-    # boot_dec_color = 'purple'    # Distinct color for bootstrap decumulation
+    acc_color = 'green'             # Accumulation
+    dec_color = '#E60026'           # Strong red (decumulation)
 
-    # acc_color = 'green'
-    # dec_color = '#E60026'         # Strong red (decumulation parametric)
-    # boot_acc_color = 'blue'       # Distinct color for bootstrap accumulation
-    # boot_dec_color = '#0072B2'    # Contrasting blue (decumulation bootstrap, colorblind-friendly)
-    acc_color = 'green'             # Accumulation (parametric)
-    dec_color = '#E60026'           # Strong red (decumulation parametric)
-    boot_acc_color = 'blue'         # Bootstrap accumulation
-    boot_dec_color = '#0072B2'      # Contrasting blue (decumulation bootstrap, colorblind-friendly)
+    # -------------------------------------------------------------------------
+    # Panel 5: Bootstrap Lifecycle Paths
+    # -------------------------------------------------------------------------
+    ax = axes[1, 1]
 
-    # Set up labeled color legend for phase/path styles
-    # Only show a legend if axes[1,1] present, guarantees axes is set
-    from matplotlib.lines import Line2D
-    legend_elements = [
-        Line2D([0], [0], color=acc_color, lw=2, alpha=0.7, label='Parametric Accumulation'),
-        Line2D([0], [0], color=dec_color, lw=2, alpha=0.7, label='Parametric Decumulation'),
-        Line2D([0], [0], color=boot_acc_color, lw=2, linestyle='--', alpha=0.7, label='Bootstrap Accumulation'),
-        Line2D([0], [0], color=boot_dec_color, lw=2, linestyle='--', alpha=0.7, label='Bootstrap Decumulation'),
-    ]
-    axes[1, 1].legend(handles=legend_elements, fontsize=8, loc='lower left', frameon=True, title='Path Phases')    
+    # Calculate mid-dates for phase labels
+    acc_mid_date = acc_dates[len(acc_dates)//2]
+    dec_mid_date = dec_dates[len(dec_dates)//2]
 
-    # Plot parametric paths (solid lines)
-    for i in range(num_spaghetti):
-        ax.plot(acc_dates, acc_values_param[i, :], color=acc_color, alpha=0.15, linewidth=0.8)
-        ax.plot(dec_dates, dec_values_param[i, :], color=dec_color, alpha=0.15, linewidth=0.8)
-
-    # Plot bootstrap paths (dashed lines) if available
     if acc_values_boot is not None:
+        boot_acc_color = 'blue'         # Bootstrap accumulation
+        boot_dec_color = '#0072B2'      # Contrasting blue (decumulation bootstrap)
+
+        # Plot bootstrap paths
         for i in range(num_spaghetti):
-            ax.plot(acc_dates, acc_values_boot[i, :], color=boot_acc_color, alpha=0.15, linewidth=0.8,
-                    linestyle='--')
-            ax.plot(dec_dates, dec_values_boot[i, :], color=boot_dec_color, alpha=0.15, linewidth=0.8,
-                    linestyle='--')
+            ax.plot(acc_dates, acc_values_boot[i, :], color=boot_acc_color, alpha=0.15, linewidth=0.8)
+            ax.plot(dec_dates, dec_values_boot[i, :], color=boot_dec_color, alpha=0.15, linewidth=0.8)
 
-    # Add vertical line at retirement
-    ax.axvline(retirement_date, color='black', linestyle='--', linewidth=2,
-               label='Retirement', alpha=0.7)
+        # Add vertical line at retirement
+        ax.axvline(retirement_date, color='black', linestyle='--', linewidth=2, alpha=0.7)
 
-    ax.set_title(f'Complete Lifecycle Paths ({num_spaghetti} simulations)',
-                 fontsize=12, fontweight='bold')
+        # Legend for bootstrap
+        legend_elements_boot = [
+            Line2D([0], [0], color=boot_acc_color, lw=2, alpha=0.7, label='Accumulation'),
+            Line2D([0], [0], color=boot_dec_color, lw=2, alpha=0.7, label='Decumulation'),
+            Line2D([0], [0], color='black', lw=2, linestyle='--', alpha=0.7, label='Retirement'),
+        ]
+        ax.legend(handles=legend_elements_boot, fontsize=7, loc='lower left', frameon=True)
+
+        ax.set_title(f'Bootstrap Lifecycle ({num_spaghetti} sims)', fontsize=12, fontweight='bold')
+    else:
+        ax.text(0.5, 0.5, 'No Bootstrap Data', ha='center', va='center', fontsize=14, transform=ax.transAxes)
+        ax.set_title('Bootstrap Lifecycle (N/A)', fontsize=12, fontweight='bold')
+
     ax.set_xlabel('Date', fontsize=10)
     ax.set_ylabel('Portfolio Value ($)', fontsize=10)
-    # ax.legend(fontsize=8, loc='upper left')
     ax.grid(True, alpha=0.3)
     ax.set_yscale('log')  # Log scale to see full range
     ax.yaxis.set_major_formatter(plt.FuncFormatter(
@@ -637,17 +696,57 @@ def create_single_run_visualization(
 
     # Format x-axis dates
     ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
-    ax.xaxis.set_major_locator(mdates.YearLocator(2))
+    ax.xaxis.set_major_locator(mdates.YearLocator(5))
+    plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
+
+    # Add phase labels (after setting scale so ylim is correct)
+    if acc_values_boot is not None:
+        ylim = ax.get_ylim()
+        ax.text(acc_mid_date, ylim[1]*0.5, 'Acc',
+                ha='center', fontsize=9, color='darkblue', weight='bold', alpha=0.7)
+        ax.text(dec_mid_date, ylim[1]*0.5, 'Dec',
+                ha='center', fontsize=9, color='#0072B2', weight='bold', alpha=0.7)
+
+    # -------------------------------------------------------------------------
+    # Panel 6: Parametric Lifecycle Paths
+    # -------------------------------------------------------------------------
+    ax = axes[1, 2]
+
+    # Plot parametric paths (solid lines)
+    for i in range(num_spaghetti):
+        ax.plot(acc_dates, acc_values_param[i, :], color=acc_color, alpha=0.15, linewidth=0.8)
+        ax.plot(dec_dates, dec_values_param[i, :], color=dec_color, alpha=0.15, linewidth=0.8)
+
+    # Add vertical line at retirement
+    ax.axvline(retirement_date, color='black', linestyle='--', linewidth=2, alpha=0.7)
+
+    # Legend for parametric
+    legend_elements_param = [
+        Line2D([0], [0], color=acc_color, lw=2, alpha=0.7, label='Accumulation'),
+        Line2D([0], [0], color=dec_color, lw=2, alpha=0.7, label='Decumulation'),
+        Line2D([0], [0], color='black', lw=2, linestyle='--', alpha=0.7, label='Retirement'),
+    ]
+    ax.legend(handles=legend_elements_param, fontsize=7, loc='lower left', frameon=True)
+
+    ax.set_title(f'Parametric Lifecycle ({num_spaghetti} sims)', fontsize=12, fontweight='bold')
+    ax.set_xlabel('Date', fontsize=10)
+    ax.set_ylabel('Portfolio Value ($)', fontsize=10)
+    ax.grid(True, alpha=0.3)
+    ax.set_yscale('log')  # Log scale to see full range
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(
+        lambda x, p: f'${x/1e6:.1f}M' if x >= 1e6 else f'${x/1e3:.0f}K'))
+
+    # Format x-axis dates
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('%Y'))
+    ax.xaxis.set_major_locator(mdates.YearLocator(5))
     plt.setp(ax.xaxis.get_majorticklabels(), rotation=45, ha='right')
 
     # Add phase labels
-    acc_mid_date = acc_dates[len(acc_dates)//2]
-    dec_mid_date = dec_dates[len(dec_dates)//2]
     ylim = ax.get_ylim()
-    ax.text(acc_mid_date, ylim[1]*0.5, 'Accumulation',
-            ha='center', fontsize=10, color='darkgreen', weight='bold', alpha=0.7)
-    ax.text(dec_mid_date, ylim[1]*0.5, 'Decumulation',
-            ha='center', fontsize=10, color='darkred', weight='bold', alpha=0.7)
+    ax.text(acc_mid_date, ylim[1]*0.5, 'Acc',
+            ha='center', fontsize=9, color='darkgreen', weight='bold', alpha=0.7)
+    ax.text(dec_mid_date, ylim[1]*0.5, 'Dec',
+            ha='center', fontsize=9, color='darkred', weight='bold', alpha=0.7)
 
     plt.suptitle(f'Monte Carlo Lifecycle Simulation\nInitial: ${config.initial_portfolio_value:,.0f}, '
                  f'Withdrawal: ${config.annual_withdrawal_amount:,.0f}/year',

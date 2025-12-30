@@ -54,8 +54,8 @@
   "num_mc_simulations": 100,
   "use_simulated_data": true,
   "mc_reindex_method": "ffill",
-  "simulated_mean_returns_file": "output/cache/simulated_mean_returns.csv",
-  "simulated_cov_matrices_file": "output/cache/simulated_cov_matrices.txt",
+  "simulated_mean_returns_file": "configs/data/simulated_mean_returns.csv",
+  "simulated_cov_matrices_file": "configs/data/simulated_cov_matrices.txt",
 
   "_sweep_settings": "Parameter sweep configurations for run_mc.py",
   "sweep_params": [

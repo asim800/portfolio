@@ -6,12 +6,19 @@ This script creates the CSV and text files containing mean returns and
 covariance matrices for Monte Carlo validation testing.
 
 Usage:
-    uv run python generate_simulated_params.py
+    uv run python tests/generate_simulated_params.py
 """
 
+import sys
+import os
+
+# Add project root to path for imports
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, PROJECT_ROOT)
+
 import pandas as pd
-from system_config import SystemConfig
-import simulated_data_params as sim_params
+from src.config import SystemConfig
+from src.data import simulated as sim_params
 
 
 def main():
@@ -21,7 +28,7 @@ def main():
     print("=" * 80)
 
     # Load configuration
-    config = SystemConfig.from_json('../configs/test_simple_buyhold.json')
+    config = SystemConfig.from_json(os.path.join(PROJECT_ROOT, 'configs/test_simple_buyhold.json'))
 
     # Load tickers
     tickers_df = pd.read_csv(config.ticker_file)
