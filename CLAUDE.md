@@ -79,6 +79,10 @@ port/
 │   │   ├── montecarlo.py             # Fan charts, lifecycle viz
 │   │   └── heatmaps.py               # Covariance heatmaps
 │   │
+│   ├── srcideas/                     # Experimental ideas and prototypes
+│   │   ├── portoptim.py              # Portfolio optimization experiments
+│   │   └── universal_methods.py      # Universal portfolio methods
+│   │
 │   └── [legacy files]                # Deprecated - use modularized packages instead
 │       ├── system_config.py          # → use config/system_config.py
 │       ├── mc_path_generator.py      # → use montecarlo/path_generator.py
@@ -383,3 +387,130 @@ The codebase has been refactored from a monolithic structure to modular packages
 | `src/visualization/` | Plotting utilities for all visualization needs |
 
 **Note**: Legacy files remain in `src/` root for backward compatibility but should not be used for new development. Use the modularized packages instead.
+
+---
+
+## REST API (src/api/)
+
+A FastAPI REST API that exposes the Monte Carlo simulation functionality via HTTP endpoints.
+
+### Running the API
+
+```bash
+cd /home/saahmed1/coding/python/fin/port
+uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8001
+
+# API docs at: http://localhost:8001/docs
+# Health check: http://localhost:8001/health
+```
+
+### API Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/health` | GET | Health check |
+| `/api/mc/simulate` | POST | Run single MC simulation |
+| `/api/mc/sweep` | POST | Run 1D parameter sweep |
+| `/api/mc/grid-sweep` | POST | Run 2D grid parameter sweep |
+| `/api/mc/config/schema` | GET | Get configuration JSON schema |
+| `/api/mc/config/sweep-params` | GET | Get sweepable parameters list |
+| `/api/mc/config/validate` | POST | Validate config before running |
+| `/api/mc/jobs/{job_id}` | GET | Get async job status/results |
+| `/api/mc/jobs/{job_id}/cancel` | POST | Cancel running job |
+| `/api/mc/jobs` | GET | List all jobs |
+
+### API Structure
+
+```
+src/api/
+├── __init__.py
+├── main.py                    # FastAPI app with all endpoints
+├── schemas/
+│   ├── __init__.py            # Re-exports all schemas
+│   ├── config.py              # MCConfigRequest, TickerWeight, enums
+│   ├── responses.py           # MCSimulationResponse, sweep responses
+│   └── jobs.py                # JobStatus schema
+├── services/
+│   ├── __init__.py
+│   ├── simulation.py          # Wrapper around run_mc.py functions
+│   └── jobs.py                # Async job management
+└── utils/
+    ├── __init__.py
+    └── recharts_formatter.py  # Transform numpy arrays → JSON format
+```
+
+### Key Schemas
+
+**MCConfigRequest** - Required fields:
+- `initial_portfolio_value` (float)
+- `retirement_date` (string, YYYY-MM-DD)
+- `simulation_horizon_years` (int, 1-50)
+- `tickers` (array of `{symbol, weight}` - must include SPY, AGG, NVDA, GLD)
+
+**Sampling Methods:**
+- `parametric` - Sample from multivariate Gaussian (default in frontend)
+- `bootstrap` - Resample from historical Yahoo Finance data
+- `both` - Run both methods and return comparison
+
+---
+
+## Node.js Frontend (mcapp/)
+
+A simple Node.js Express app that provides a web UI for the FastAPI Monte Carlo simulation API.
+
+### Running the Frontend
+
+```bash
+# Terminal 1: Start FastAPI backend
+cd /home/saahmed1/coding/python/fin/port
+uv run uvicorn src.api.main:app --host 0.0.0.0 --port 8001
+
+# Terminal 2: Start Node.js frontend
+cd /home/saahmed1/coding/python/fin/port/mcapp
+npm install
+npm start
+
+# Open http://localhost:3000
+```
+
+### Frontend Structure
+
+```
+mcapp/
+├── package.json              # Node.js dependencies
+├── server.js                 # Express server with API proxy to port 8001
+└── public/
+    ├── index.html            # Main simulation page with forms and results
+    ├── css/
+    │   └── styles.css        # Styling including success rate colors
+    └── js/
+        ├── api-client.js     # MC API client (all endpoint methods)
+        ├── app.js            # Main application logic, sweep handling
+        └── charts.js         # Chart.js fan charts and sweep visualizations
+```
+
+### UI Features
+
+1. **Configuration Form** - All MCConfigRequest fields organized in fieldsets:
+   - Portfolio Settings (initial value, tickers/weights)
+   - Time Settings (retirement date, horizon, historical data dates)
+   - Accumulation Settings (contributions, employer match)
+   - Decumulation Settings (withdrawal strategy, amount, inflation)
+   - Simulation Settings (num_simulations, frequency, sampling method)
+   - Parameter Sweep Settings (optional 1D or 2D sweep)
+
+2. **Results Display**:
+   - Summary table with color-coded success rates
+   - Fan charts for accumulation and decumulation phases
+   - Percentile statistics at retirement and horizon
+
+3. **Parameter Sweep Features**:
+   - 1D sweep with line chart and summary table
+   - 2D grid sweep with color-coded heatmap table
+   - Sweepable parameters: annual_withdrawal_amount, initial_portfolio_value, simulation_horizon_years, inflation_rate, contribution_amount
+
+4. **Success Rate Colors**:
+   - Green (≥80%): High success
+   - Yellow (≥60%): Medium success
+   - Orange (≥40%): Low-medium success
+   - Red (<40%): Low success

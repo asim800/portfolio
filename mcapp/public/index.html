@@ -1,0 +1,385 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Monte Carlo Simulation</title>
+  <link rel="stylesheet" href="/css/styles.css">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+  <header>
+    <h1>Monte Carlo Portfolio Simulation</h1>
+    <div class="status-indicator">
+      <span id="api-status" class="status-dot offline"></span>
+      <span id="api-status-text">Checking API...</span>
+    </div>
+  </header>
+
+  <main>
+    <div class="container">
+      <!-- Configuration Form -->
+      <section class="config-panel">
+        <h2>Simulation Configuration</h2>
+        <form id="simulation-form">
+          <!-- Portfolio Settings -->
+          <fieldset>
+            <legend>Portfolio Settings</legend>
+            <div class="form-group">
+              <label for="initial_portfolio_value">Initial Portfolio Value ($)</label>
+              <input type="number" id="initial_portfolio_value" name="initial_portfolio_value"
+                     value="1000000" min="1000" step="1000" required>
+            </div>
+            <div class="form-group">
+              <label>Tickers & Weights <span class="help-text">(Must include SPY, AGG, NVDA, GLD)</span></label>
+              <div id="tickers-container">
+                <div class="ticker-row">
+                  <input type="text" name="ticker_symbol" value="SPY" placeholder="Symbol" class="ticker-symbol">
+                  <input type="number" name="ticker_weight" value="0.6" min="0" max="1" step="0.01" class="ticker-weight">
+                  <button type="button" class="btn-remove-ticker" onclick="removeTicker(this)">-</button>
+                </div>
+                <div class="ticker-row">
+                  <input type="text" name="ticker_symbol" value="AGG" placeholder="Symbol" class="ticker-symbol">
+                  <input type="number" name="ticker_weight" value="0.4" min="0" max="1" step="0.01" class="ticker-weight">
+                  <button type="button" class="btn-remove-ticker" onclick="removeTicker(this)">-</button>
+                </div>
+                <div class="ticker-row">
+                  <input type="text" name="ticker_symbol" value="NVDA" placeholder="Symbol" class="ticker-symbol">
+                  <input type="number" name="ticker_weight" value="0" min="0" max="1" step="0.01" class="ticker-weight">
+                  <button type="button" class="btn-remove-ticker" onclick="removeTicker(this)">-</button>
+                </div>
+                <div class="ticker-row">
+                  <input type="text" name="ticker_symbol" value="GLD" placeholder="Symbol" class="ticker-symbol">
+                  <input type="number" name="ticker_weight" value="0" min="0" max="1" step="0.01" class="ticker-weight">
+                  <button type="button" class="btn-remove-ticker" onclick="removeTicker(this)">-</button>
+                </div>
+              </div>
+              <button type="button" id="add-ticker" onclick="addTicker()">+ Add Ticker</button>
+              <div id="weight-sum" class="weight-info">Total: 100%</div>
+            </div>
+          </fieldset>
+
+          <!-- Time Settings -->
+          <fieldset>
+            <legend>Time Settings</legend>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="retirement_date">Retirement Date</label>
+                <input type="date" id="retirement_date" name="retirement_date" required>
+              </div>
+              <div class="form-group">
+                <label for="simulation_horizon_years">Horizon (Years)</label>
+                <input type="number" id="simulation_horizon_years" name="simulation_horizon_years"
+                       value="20" min="1" max="50" required>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="start_date">Historical Start</label>
+                <input type="date" id="start_date" name="start_date" value="2005-01-01">
+              </div>
+              <div class="form-group">
+                <label for="end_date">Historical End</label>
+                <input type="date" id="end_date" name="end_date" value="2025-01-01">
+              </div>
+            </div>
+          </fieldset>
+
+          <!-- Accumulation Settings -->
+          <fieldset>
+            <legend>Accumulation Phase</legend>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="contribution_amount">Contribution Amount ($)</label>
+                <input type="number" id="contribution_amount" name="contribution_amount"
+                       value="0" min="0" step="100">
+              </div>
+              <div class="form-group">
+                <label for="contribution_frequency">Contribution Frequency</label>
+                <select id="contribution_frequency" name="contribution_frequency">
+                  <option value="weekly">Weekly</option>
+                  <option value="biweekly" selected>Biweekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="employer_match_rate">Employer Match Rate (%)</label>
+                <input type="number" id="employer_match_rate" name="employer_match_rate"
+                       value="0" min="0" max="100" step="1">
+              </div>
+            </div>
+          </fieldset>
+
+          <!-- Decumulation Settings -->
+          <fieldset>
+            <legend>Decumulation Phase</legend>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="annual_withdrawal_amount">Annual Withdrawal ($)</label>
+                <input type="number" id="annual_withdrawal_amount" name="annual_withdrawal_amount"
+                       value="40000" min="0" step="1000">
+              </div>
+              <div class="form-group">
+                <label for="withdrawal_strategy">Withdrawal Strategy</label>
+                <select id="withdrawal_strategy" name="withdrawal_strategy">
+                  <option value="constant_inflation_adjusted" selected>Constant (Inflation Adjusted)</option>
+                  <option value="constant_percentage">Constant Percentage</option>
+                  <option value="guyton_klinger">Guyton-Klinger</option>
+                  <option value="vpw">Variable Percentage Withdrawal</option>
+                  <option value="floor_ceiling">Floor-Ceiling</option>
+                  <option value="rmd">Required Minimum Distribution</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="inflation_rate">Inflation Rate (%)</label>
+                <input type="number" id="inflation_rate" name="inflation_rate"
+                       value="3" min="0" max="20" step="0.5">
+              </div>
+              <div class="form-group">
+                <label for="withdrawal_frequency">Withdrawal Frequency</label>
+                <select id="withdrawal_frequency" name="withdrawal_frequency">
+                  <option value="weekly">Weekly</option>
+                  <option value="biweekly" selected>Biweekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </div>
+            </div>
+          </fieldset>
+
+          <!-- Simulation Settings -->
+          <fieldset>
+            <legend>Simulation Settings</legend>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="num_simulations">Number of Simulations</label>
+                <input type="number" id="num_simulations" name="num_simulations"
+                       value="100" min="10" max="50000" step="1">
+              </div>
+              <div class="form-group">
+                <label for="simulation_frequency">Simulation Frequency</label>
+                <select id="simulation_frequency" name="simulation_frequency">
+                  <option value="daily">Daily</option>
+                  <option value="weekly" selected>Weekly</option>
+                  <option value="biweekly">Biweekly</option>
+                  <option value="monthly">Monthly</option>
+                </select>
+              </div>
+            </div>
+            <div class="form-row">
+              <div class="form-group">
+                <label for="sampling_method">Sampling Method</label>
+                <select id="sampling_method" name="sampling_method">
+                  <option value="parametric" selected>Parametric</option>
+                  <option value="bootstrap">Bootstrap</option>
+                  <option value="both">Both</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="seed">Random Seed</label>
+                <input type="number" id="seed" name="seed" value="42" min="0">
+              </div>
+            </div>
+          </fieldset>
+
+          <!-- Parameter Sweep Settings -->
+          <fieldset>
+            <legend>Parameter Sweep <span class="help-text">(Optional)</span></legend>
+            <div class="form-group">
+              <label>
+                <input type="checkbox" id="enable-sweep" onchange="toggleSweep()">
+                Enable Parameter Sweep
+              </label>
+            </div>
+            <div id="sweep-controls" class="sweep-controls hidden">
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="sweep-param1">Parameter 1 (Rows)</label>
+                  <select id="sweep-param1" name="sweep_param1" onchange="updateSweepDefaults(1)">
+                    <option value="">-- None --</option>
+                    <option value="annual_withdrawal_amount">Annual Withdrawal</option>
+                    <option value="initial_portfolio_value">Initial Portfolio Value</option>
+                    <option value="simulation_horizon_years">Horizon Years</option>
+                    <option value="inflation_rate">Inflation Rate</option>
+                    <option value="contribution_amount">Contribution Amount</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="sweep-param1-start">Start</label>
+                  <input type="number" id="sweep-param1-start" step="any">
+                </div>
+                <div class="form-group">
+                  <label for="sweep-param1-end">End</label>
+                  <input type="number" id="sweep-param1-end" step="any">
+                </div>
+                <div class="form-group">
+                  <label for="sweep-param1-step">Step</label>
+                  <input type="number" id="sweep-param1-step" step="any">
+                </div>
+              </div>
+              <div class="form-row">
+                <div class="form-group">
+                  <label for="sweep-param2">Parameter 2 (Columns) <span class="help-text">- optional for 2D grid</span></label>
+                  <select id="sweep-param2" name="sweep_param2" onchange="updateSweepDefaults(2)">
+                    <option value="">-- None --</option>
+                    <option value="annual_withdrawal_amount">Annual Withdrawal</option>
+                    <option value="initial_portfolio_value">Initial Portfolio Value</option>
+                    <option value="simulation_horizon_years">Horizon Years</option>
+                    <option value="inflation_rate">Inflation Rate</option>
+                    <option value="contribution_amount">Contribution Amount</option>
+                  </select>
+                </div>
+                <div class="form-group">
+                  <label for="sweep-param2-start">Start</label>
+                  <input type="number" id="sweep-param2-start" step="any">
+                </div>
+                <div class="form-group">
+                  <label for="sweep-param2-end">End</label>
+                  <input type="number" id="sweep-param2-end" step="any">
+                </div>
+                <div class="form-group">
+                  <label for="sweep-param2-step">Step</label>
+                  <input type="number" id="sweep-param2-step" step="any">
+                </div>
+              </div>
+              <div class="form-group">
+                <label>
+                  <input type="checkbox" id="skip-bootstrap-sweep" checked>
+                  Skip Bootstrap (faster)
+                </label>
+              </div>
+            </div>
+          </fieldset>
+
+          <!-- Action Buttons -->
+          <div class="form-actions">
+            <button type="button" id="validate-btn" onclick="validateConfig()">Validate</button>
+            <button type="submit" id="run-btn" class="primary">Run Simulation</button>
+            <button type="button" id="sweep-btn" class="primary" onclick="runSweep()" style="display:none;">Run Sweep</button>
+            <button type="button" id="stop-sweep-btn" class="danger" onclick="stopSweep()" style="display:none;">Stop</button>
+            <button type="button" id="cancel-btn" onclick="cancelJob()" disabled>Cancel</button>
+          </div>
+        </form>
+
+        <!-- Validation Messages -->
+        <div id="validation-messages" class="messages hidden"></div>
+      </section>
+
+      <!-- Results Panel -->
+      <section class="results-panel hidden" id="results-panel">
+        <h2>Results</h2>
+
+        <!-- Summary Table -->
+        <div class="results-section">
+          <h3>Summary</h3>
+          <table id="summary-table" class="styled-table">
+            <thead>
+              <tr id="summary-header"></tr>
+            </thead>
+            <tbody id="summary-body"></tbody>
+          </table>
+        </div>
+
+        <!-- Charts -->
+        <div class="charts-container">
+          <div class="chart-wrapper">
+            <h3>Accumulation Phase</h3>
+            <canvas id="acc-chart"></canvas>
+          </div>
+          <div class="chart-wrapper">
+            <h3>Decumulation Phase</h3>
+            <canvas id="dec-chart"></canvas>
+          </div>
+        </div>
+
+        <!-- Metadata -->
+        <div class="results-section">
+          <h3>Simulation Details</h3>
+          <div id="metadata" class="metadata-grid"></div>
+        </div>
+      </section>
+
+      <!-- Sweep Results Panel -->
+      <section class="sweep-results-panel hidden" id="sweep-results-panel">
+        <h2>Sweep Results</h2>
+
+        <!-- 1D Sweep Results -->
+        <div id="sweep-1d-results" class="hidden">
+          <div class="results-section">
+            <h3>Success Rate by Parameter</h3>
+            <div class="chart-wrapper">
+              <canvas id="sweep-chart"></canvas>
+            </div>
+          </div>
+          <div class="results-section">
+            <h3>Summary Table</h3>
+            <table id="sweep-table" class="styled-table">
+              <thead id="sweep-table-header"></thead>
+              <tbody id="sweep-table-body"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- 2D Grid Sweep Results -->
+        <div id="sweep-2d-results" class="hidden">
+          <div class="results-section">
+            <h3>Success Rate Heatmap</h3>
+            <div id="heatmap-container" class="heatmap-container"></div>
+          </div>
+          <div class="results-section">
+            <h3>Grid Results Table</h3>
+            <div class="table-scroll">
+              <table id="grid-table" class="styled-table grid-table">
+                <thead id="grid-table-header"></thead>
+                <tbody id="grid-table-body"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- Sweep Metadata -->
+        <div class="results-section">
+          <h3>Sweep Details</h3>
+          <div id="sweep-metadata" class="metadata-grid"></div>
+        </div>
+      </section>
+
+      <!-- Jobs Panel -->
+      <section class="jobs-panel">
+        <h2>Jobs <button type="button" onclick="refreshJobs()" class="btn-small">Refresh</button></h2>
+        <table id="jobs-table" class="styled-table">
+          <thead>
+            <tr>
+              <th>Job ID</th>
+              <th>Status</th>
+              <th>Progress</th>
+              <th>Created</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="jobs-body">
+            <tr><td colspan="5" class="empty">No jobs yet</td></tr>
+          </tbody>
+        </table>
+      </section>
+    </div>
+  </main>
+
+  <footer>
+    <p>Monte Carlo Simulation API | <a href="/api/mc/config/schema" target="_blank">API Schema</a></p>
+  </footer>
+
+  <!-- Loading Overlay -->
+  <div id="loading-overlay" class="loading-overlay hidden">
+    <div class="spinner"></div>
+    <p id="loading-message">Running simulation...</p>
+  </div>
+
+  <script src="/js/api-client.js"></script>
+  <script src="/js/charts.js"></script>
+  <script src="/js/app.js"></script>
+</body>
+</html>

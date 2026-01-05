@@ -7,6 +7,7 @@ requires-python = ">=3.12"
 dependencies = [
     "cvxpy>=1.7.2",
     "ecos>=2.0.14",
+    "fastapi>=0.115.0",
     "ipdb>=0.13.13",
     "ipython>=9.5.0",
     "matplotlib>=3.10.6",
@@ -16,6 +17,7 @@ dependencies = [
     "pytest>=8.4.2",
     "scikit-learn>=1.7.2",
     "tqdm>=4.67.1",
+    "uvicorn>=0.32.0",
     "yf>=0.0.5",
     "yfinance>=0.2.65",
 ]
